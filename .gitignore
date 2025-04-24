@@ -1,0 +1,52 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Unit test / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+coverage.xml
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Local development
+.env
+.env.local
+*.log
+logs/
+
+# mypy
+.mypy_cache/
+
+# Misc
+.DS_Store
+
+# Data
+data/
+
+# Models
+models/
+sbert-output/
+
+# Results
+results/
