@@ -1,0 +1,9 @@
+torch
+torchvision
+pandas
+numpy
+tqdm
+tensorboardX
+scikit-learn
+pyarrow
+accelerate>=0.27.2
