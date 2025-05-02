@@ -10,3 +10,6 @@ tqdm
 scikit-learn
 sqlalchemy
 faker
+joblib
+boto3
+PyYAML
