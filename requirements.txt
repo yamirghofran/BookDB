@@ -1,0 +1,12 @@
+pandas
+numpy
+torch
+dask
+matplotlib
+seaborn
+pyarrow
+sentence-transformers
+tqdm
+scikit-learn
+sqlalchemy
+faker
