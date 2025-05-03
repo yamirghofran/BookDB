@@ -126,7 +126,8 @@ CREATE INDEX idx_activitylogs_user_id ON ActivityLogs(user_id);
 CREATE INDEX idx_activitylogs_activity_type ON ActivityLogs(activity_type);
 CREATE INDEX idx_activitylogs_created_at ON ActivityLogs(created_at);
 
--- Trigger function to update the search_vector column in Books (Remains the same)
+-- +goose StatementBegin
+-- Trigger function to update the search_vector column in Books
 CREATE OR REPLACE FUNCTION update_book_search_vector()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -145,13 +146,15 @@ NEW.search_vector :=
 RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
--- Trigger to update search_vector when book is inserted or updated (Remains the same)
+-- Trigger to update search_vector when book is inserted or updated
 CREATE TRIGGER tsvectorupdate_book
     BEFORE INSERT OR UPDATE ON Books
                          FOR EACH ROW EXECUTE FUNCTION update_book_search_vector();
 
--- Trigger function to update search_vector when BookAuthors link changes (Remains the same)
+-- +goose StatementBegin
+-- Trigger function to update search_vector when BookAuthors link changes
 CREATE OR REPLACE FUNCTION update_book_search_on_author_change()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -163,17 +166,20 @@ ELSE -- INSERT or UPDATE
         v_book_id := NEW.book_id;
 END IF;
 
+-- Trigger an update on the corresponding book row to recalculate the vector
 UPDATE Books SET updated_at = CURRENT_TIMESTAMP WHERE id = v_book_id;
 
+-- If the UPDATE changed book_id (unlikely but possible), update the old book too
 IF (TG_OP = 'UPDATE' AND OLD.book_id <> NEW.book_id) THEN
 UPDATE Books SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.book_id;
 END IF;
 
-RETURN NULL;
+RETURN NULL; -- Result is ignored since it's an AFTER trigger
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
--- Trigger to update search_vector when authors are added/removed/changed (Remains the same)
+-- Trigger to update search_vector when authors are added/removed/changed
 CREATE TRIGGER tsvectorupdate_book_authors
     AFTER INSERT OR DELETE OR UPDATE ON BookAuthors
 FOR EACH ROW EXECUTE FUNCTION update_book_search_on_author_change();
