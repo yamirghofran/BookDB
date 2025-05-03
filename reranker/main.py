@@ -229,8 +229,66 @@ class BookReranker:
         )
         return top_recommendations
 
+    def get_book_details(self, book_ids: List[str]) -> Dict[str, Dict]:
+        """
+        Get additional book details from the database for the recommended books.
+
+        Args:
+            book_ids: List of book IDs to fetch details for
+
+        Returns:
+            Dictionary mapping book_id to book details
+        """
+        if not book_ids:
+            return {}
+
+        try:
+            cursor = self.db_conn.cursor(cursor_factory=RealDictCursor)
+            placeholders = ", ".join(["%s"] * len(book_ids))
+            query = f"""
+                SELECT * FROM books 
+                WHERE book_id IN ({placeholders})
+            """
+            cursor.execute(query, tuple(book_ids))
+            results = cursor.fetchall()
+            cursor.close()
+
+            # Convert to dictionary with book_id as key
+            book_details = {str(row["book_id"]): dict(row) for row in results}
+            return book_details
+        except Exception as e:
+            logger.error(f"Error fetching book details: {e}")
+            return {}
+
+    def enrich_recommendations(
+        self, recommendations: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enrich recommendation results with book details.
+
+        Args:
+            recommendations: List of recommendation dictionaries with book_id
+
+        Returns:
+            List of recommendations with added book details
+        """
+        book_ids = [rec["book_id"] for rec in recommendations]
+        book_details = self.get_book_details(book_ids)
+
+        enriched_recs = []
+        for rec in recommendations:
+            book_id = rec["book_id"]
+            if book_id in book_details:
+                # Create a new dict with recommendation data and book details
+                enriched_rec = {**rec, "details": book_details[book_id]}
+                enriched_recs.append(enriched_rec)
+            else:
+                enriched_recs.append(rec)
+
+        return enriched_recs
+
     def close(self):
-        """Close the database connection."""
+        """Close database connection."""
         if self.db_conn:
             self.db_conn.close()
             logger.info("Database connection closed")
