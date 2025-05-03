@@ -2,32 +2,56 @@
 """
 download_r2_bookdb_users.py
 ---------------------------
-Grabs the BookDB users PostgreSQL dump from Cloudflare R2.
+Grabs the BookDB users PostgreSQL dump from Cloudflare R2.
 
 Usage:
     python download_r2_bookdb_users.py           # saves to bookdb_users.sql
-    R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… python download_r2_bookdb_users.py /tmp/users.sql
+    python download_r2_bookdb_users.py /tmp/users.sql
+
+Environment variables (should be defined in .env file):
+    R2_ENDPOINT_URL - The Cloudflare R2 endpoint URL
+    R2_BUCKET_NAME - The bucket name
+    R2_OBJECT_KEY - Path to the object in the bucket
+    R2_ACCESS_KEY_ID - Access key ID for authentication
+    R2_SECRET_ACCESS_KEY - Secret access key for authentication
 """
 
 import sys
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-# --------- Configuration ---------------------------------------------------
-ENDPOINT = "https://a9a190ee80813000e18bacf626b1281b.r2.cloudflarestorage.com"
-BUCKET   = "bookdbio"
-OBJECT_KEY = "db/bookdb_users.sql"
+# Load environment variables from .env file
+dotenv_path = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))).joinpath('.env')
+load_dotenv(dotenv_path)
 
-# Pull creds from env vars if set, else fall back to hard‑coded values
-ACCESS_KEY = os.getenv("R2_ACCESS_KEY_ID",  "85fec6dd1268801ac8c1c59175ba0b76")
-SECRET_KEY = os.getenv("R2_SECRET_ACCESS_KEY",
-                       "798b753bab748f2c7f5e0f46fd6506b7f0b206e362b1e00055d060a72b88d55d")
+# Get configuration from environment variables
+ENDPOINT = os.getenv("R2_ENDPOINT_URL")
+BUCKET = os.getenv("R2_BUCKET_NAME")
+OBJECT_KEY = os.getenv("R2_OBJECT_KEY")
+ACCESS_KEY = os.getenv("R2_ACCESS_KEY_ID")
+SECRET_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
+
+# Validate required environment variables
+required_vars = {
+    "R2_ENDPOINT_URL": ENDPOINT,
+    "R2_BUCKET_NAME": BUCKET,
+    "R2_OBJECT_KEY": OBJECT_KEY,
+    "R2_ACCESS_KEY_ID": ACCESS_KEY,
+    "R2_SECRET_ACCESS_KEY": SECRET_KEY
+}
+
+missing_vars = [var for var, value in required_vars.items() if not value]
+if missing_vars:
+    print(f"Error: Missing required environment variables: {', '.join(missing_vars)}", file=sys.stderr)
+    print("Please create a .env file with the required variables", file=sys.stderr)
+    sys.exit(1)
 
 # Destination path (default: bookdb_users.sql in current dir)
 DEST_PATH = sys.argv[1] if len(sys.argv) > 1 else "bookdb_users.sql"
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     s3 = boto3.client(

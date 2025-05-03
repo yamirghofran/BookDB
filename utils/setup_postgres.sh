@@ -126,6 +126,13 @@ if [ ! -f "$DUMP_FILE" ]; then
     fi
 fi
 
+# Verify the dump file is valid SQL
+if ! grep -q "CREATE TABLE" "$DUMP_FILE"; then
+    echo -e "${RED}The dump file does not appear to be a valid PostgreSQL dump.${NC}"
+    echo -e "${RED}Please check the file and try again.${NC}"
+    exit 1
+fi
+
 # Make a temporary copy with appropriate permissions
 TEMP_DUMP="/tmp/bookdb_users_temp.sql"
 echo -e "${YELLOW}Copying dump file to temporary location with appropriate permissions...${NC}"
@@ -173,8 +180,8 @@ echo -e "${GREEN}Database and user created successfully!${NC}"
 
 # Restore the database from temporary dump file
 echo -e "${YELLOW}Restoring database from dump file...${NC}"
-# Fix common SQL syntax issues
-sed -i "s/child's/child\\\\'s/g" "$TEMP_DUMP" 2>/dev/null || true
+# Fix the apostrophe issue in the SQL file if it exists
+sed -i "s/child's/child\\\\'s/g" "$TEMP_DUMP"
 
 # Restore the database
 sudo -u postgres psql -d $DB_NAME -f "$TEMP_DUMP" || {

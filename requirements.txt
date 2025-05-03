@@ -17,3 +17,4 @@ psycopg2-binary
 torchvision
 tensorboardX
 accelerate>=0.27.2
+python-dotenv
