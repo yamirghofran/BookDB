@@ -78,4 +78,33 @@ class ModelSaver(PipelineStep):
         print(f"Model saved to {model_path}")
         return model_path  # Return path or confirmation
 
+class NCFDataPreparer(PipelineStep):
+    def run(self, inputs=None):
+        print("Running NCFDataPreparer...")
+        import dask.dataframe as dd
+        import pandas as pd
+        # Load reduced interactions and ID maps
+        interactions_reduced_df = dd.read_parquet(self.config['reduced_interactions_path'])
+        user_id_map = pd.read_csv(self.config['user_id_map_path'])
+        book_id_map = pd.read_csv(self.config['book_id_map_path'])
+        # Example: Save valid user IDs (customize as needed)
+        valid_user_ids = interactions_reduced_df['user_id'].unique().compute()
+        pd.DataFrame({'user_id': valid_user_ids}).to_csv(self.config['output_user_ids'], index=False)
+        print(f"Valid user IDs saved to {self.config['output_user_ids']}")
+        # Return the reduced interactions as pandas DataFrame for next steps
+        return interactions_reduced_df.compute()
+
+class NCFTrainer(PipelineStep):
+    def run(self, inputs=None):
+        print("Running NCFTrainer...")
+        # book_interactions is expected as input
+        book_interactions = inputs[0]
+        # Import the NCF pipeline runner
+        import sys
+        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'neural-collaborative-filtering', 'src')))
+        from train import run_ncf_pipeline
+        run_ncf_pipeline(book_interactions, output_dir=self.config.get('ncf_output_dir', '../res'))
+        print("NCF pipeline completed.")
+        return None
+
 # Other classes for Plotting, Creating Files etc. similarly
