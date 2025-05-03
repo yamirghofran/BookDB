@@ -22,7 +22,7 @@ class BookReranker:
     2. Reranks recommendations based on combined model confidence scores
     """
 
-    def __init__(self, config_path: str = "../config.yaml"):
+    def __init__(self, config_path: str = "config.yaml"):
         """
         Initialize the reranker with configuration.
 
@@ -295,56 +295,57 @@ class BookReranker:
 
 
 def main():
-    """Run a test of the reranker with sample data."""
+    """
+    Process book recommendations using the reranker.
+    
+    The reranker:
+    1. Takes model and collaborative filtering recommendations as inputs
+    2. Removes books already in the user's library
+    3. Reranks based on combined confidence scores
+    4. Returns the new recommendation ranks
+    """
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Rerank book recommendations")
+    parser.add_argument("--user_id", required=True, help="ID of the user to get recommendations for")
+    parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    parser.add_argument("--model_weight", type=float, default=0.5, help="Weight for model scores (0.0-1.0)")
+    parser.add_argument("--top_n", type=int, default=10, help="Number of recommendations to return")
+    parser.add_argument("--enrich", action="store_true", help="Enrich recommendations with book details")
+    args = parser.parse_args()
+    
     try:
-        # Initialize reranker
-        reranker = BookReranker()
-
-        # Sample user and recommendations (for testing)
-        sample_user_id = "test_user_123"
-
-        # Sample ML model recommendations
-        model_recs = [
-            {"book_id": "book1", "score": 0.95},
-            {"book_id": "book2", "score": 0.87},
-            {"book_id": "book3", "score": 0.82},
-            {"book_id": "book4", "score": 0.76},
-        ]
-
-        # Sample CF recommendations
-        cf_recs = [
-            {"book_id": "book3", "score": 0.92},
-            {"book_id": "book5", "score": 0.88},
-            {"book_id": "book6", "score": 0.85},
-            {"book_id": "book2", "score": 0.79},
-        ]
-
+        # Initialize reranker with provided config
+        reranker = BookReranker(config_path=args.config)
+        
+        # Get recommendations from standard input or API
+        # This part would be customized based on how your system passes recommendations
+        import json
+        import sys
+        
+        try:
+            input_data = json.load(sys.stdin)
+            model_recs = input_data.get("model_recommendations", [])
+            cf_recs = input_data.get("cf_recommendations", [])
+        except json.JSONDecodeError:
+            logger.error("Failed to parse input JSON")
+            return 1
+            
         # Get reranked recommendations
         reranked = reranker.rerank_recommendations(
-            user_id=sample_user_id,
+            user_id=args.user_id,
             model_recs=model_recs,
             cf_recs=cf_recs,
-            model_weight=0.6,
-            top_n=5,
+            model_weight=args.model_weight,
+            top_n=args.top_n,
         )
-
-        # Enrich with book details
-        enriched_recs = reranker.enrich_recommendations(reranked)
-
-        # Print results
-        print("\nReranked Book Recommendations:")
-        for i, rec in enumerate(enriched_recs, 1):
-            print(f"{i}. Book ID: {rec['book_id']}, Score: {rec['score']:.4f}")
-            print(f"   Sources: {', '.join(rec['sources'])}")
-            print(
-                f"   Model Score: {rec['model_score']:.4f}, CF Score: {rec['cf_score']:.4f}"
-            )
-            if "details" in rec:
-                details = rec["details"]
-                title = details.get("title", "Unknown")
-                author = details.get("author", "Unknown")
-                print(f"   Title: {title}, Author: {author}")
-            print()
+        
+        # Optionally enrich with book details
+        if args.enrich:
+            reranked = reranker.enrich_recommendations(reranked)
+        
+        # Output results as JSON
+        print(json.dumps({"recommendations": reranked}))
 
     except Exception as e:
         logger.error(f"Error in main function: {e}")
