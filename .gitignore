@@ -50,3 +50,4 @@ sbert-output/
 
 # Results
 results/
+bookdb_users.sql

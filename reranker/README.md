@@ -6,17 +6,31 @@ A recommendation reranking module for the BookDB project that combines multiple 
 
 The BookDB Reranker takes recommendations from multiple sources (e.g., machine learning models and collaborative filtering) and:
 
-1. Filters out books that are already in the user's library
-2. Normalizes scores from different recommendation systems
-3. Combines scores using configurable weights
-4. Reranks recommendations based on combined scores
-5. Enriches the final recommendations with book details from the database
+1. Filters out books that are already in the user's library using the UserLibrary table
+2. Significantly boosts scores for books that appear in both recommendation lists
+3. Considers user interaction data, giving higher scores to books with more interactions
+4. Normalizes scores from different recommendation systems
+5. Combines scores using configurable weights
+6. Reranks recommendations based on combined scores
+7. Enriches the final recommendations with book details from the database
+
+## Process Flow
+
+The reranking process follows these steps:
+
+1. Query the UserLibrary table to identify books the user already owns
+2. Take two input lists of recommendations (assumed to be in descending order of similarity)
+3. Remove any books that appear in the user's library
+4. Identify books that appear in both recommendation lists and boost their scores
+5. Retrieve interaction counts for each book and apply an additional boost based on interaction frequency
+6. Combine all scores to create a single unified ranking
+7. Return the top N recommended books
 
 ## Inputs
 
 The reranker accepts the following inputs:
 
-- **User ID**: String identifier for the user receiving recommendations
+- **User ID**: String identifier (UUID) for the user receiving recommendations
 - **Model Recommendations**: List of dictionaries containing ML model-based recommendations with:
   - `book_id`: String identifier for the book
   - `score`: Float confidence score (0.0-1.0) from the model
@@ -25,6 +39,21 @@ The reranker accepts the following inputs:
   - `score`: Float confidence score (0.0-1.0) from the CF system
 - **Model Weight**: Float value (0.0-1.0) determining how much weight to give ML model scores vs CF scores
 - **Top N**: Integer specifying how many final recommendations to return
+- **Boost Factor**: Optional parameter determining how much to boost books appearing in both recommendation sources
+
+## Database Schema
+
+The reranker relies on the following database tables:
+
+- **UserLibrary**: Stores user-owned books
+  ```sql
+  CREATE TABLE UserLibrary (
+      user_id UUID NOT NULL REFERENCES Users(id) ON DELETE CASCADE,
+      book_id VARCHAR NOT NULL,
+      PRIMARY KEY (user_id, book_id)
+  )
+  ```
+- **user_book_interactions**: Tracks user interactions with books to influence recommendations
 
 ## Outputs
 
@@ -35,6 +64,8 @@ The reranker produces a list of dictionaries containing:
 - `model_score`: Normalized score from the ML model
 - `cf_score`: Normalized score from the collaborative filtering system
 - `sources`: List of strings indicating which systems recommended this book (`"model"`, `"cf"`, or both)
+- `interaction_count`: Number of interactions the user has had with similar books
+- `from_both_sources`: Boolean indicating whether the book was recommended by both systems
 - `details`: Dictionary containing book metadata (when enriched):
   - `title`: Book title
   - `author`: Book author
