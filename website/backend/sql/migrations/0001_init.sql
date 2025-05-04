@@ -114,10 +114,9 @@ CREATE TABLE ActivityLogs (
 -- Indexes (Remain the same)
 CREATE INDEX idx_users_email ON Users(email);
 CREATE INDEX idx_authors_name ON Authors(name);
-CREATE INDEX idx_authors_user_id ON Authors(user_id);
 CREATE INDEX idx_genres_name ON Genres(name);
 CREATE INDEX idx_books_title ON Books(title);
-CREATE INDEX idx_books_publish_date ON Books(publish_date);
+CREATE INDEX idx_books_publication_year ON Books(publication_year);
 CREATE INDEX idx_books_search_vector ON Books USING GIN(search_vector);
 CREATE INDEX idx_bookauthors_author_id ON BookAuthors(author_id);
 CREATE INDEX idx_bookgenres_genre_id ON BookGenres(genre_id);
