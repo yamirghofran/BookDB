@@ -17,94 +17,98 @@ CREATE TYPE user_activity_type AS ENUM (
     'update_profile'
 );
 
--- Users Table
-CREATE TABLE Users (
-                       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                       name VARCHAR(255) NOT NULL,
-                       email VARCHAR(255) UNIQUE NOT NULL,
-                       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                       updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Authors Table
-CREATE TABLE Authors (
-                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                         name VARCHAR(255) NOT NULL,
-                         bio TEXT,
-                         user_id UUID UNIQUE REFERENCES Users(id) ON DELETE SET NULL,
-                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Genres Table
-CREATE TABLE Genres (
-                        id SERIAL PRIMARY KEY,
-                        name VARCHAR(100) UNIQUE NOT NULL
-);
-
--- Books Table
-CREATE TABLE Books (
-                       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                       title VARCHAR(255) NOT NULL,
-                       description TEXT,
-                       publish_date DATE,
-                       cover_image_url TEXT,
-                       search_vector TSVECTOR,
-                       created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                       updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Junction table for Books and Authors
-CREATE TABLE BookAuthors (
-                             book_id UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,
-                             author_id UUID NOT NULL REFERENCES Authors(id) ON DELETE CASCADE,
-                             PRIMARY KEY (book_id, author_id)
-);
-
--- Junction table for Books and Genres
-CREATE TABLE BookGenres (
-                            book_id UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,
-                            genre_id INTEGER NOT NULL REFERENCES Genres(id) ON DELETE CASCADE,
-                            PRIMARY KEY (book_id, genre_id)
-);
-
--- Junction table for Similar Books
-CREATE TABLE SimilarBooks (
-                              book_id_1 UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,
-                              book_id_2 UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,
-                              PRIMARY KEY (book_id_1, book_id_2),
-                              CONSTRAINT check_different_books CHECK (book_id_1 <> book_id_2),
-                              CONSTRAINT check_ordered_pair CHECK (book_id_1 < book_id_2)
-);
-
--- Reviews/Posts Table
-CREATE TABLE Reviews (
-                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                         text TEXT NOT NULL,
-                         rating SMALLINT,
-                         book_id UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,
-                         user_id UUID NOT NULL REFERENCES Users(id) ON DELETE CASCADE,
-                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                         CONSTRAINT rating_range CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5))
-);
-
--- User Library Table
-CREATE TABLE UserLibrary (
-                             user_id UUID NOT NULL REFERENCES Users(id) ON DELETE CASCADE,
-                             book_id UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,
-                             added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                             PRIMARY KEY (user_id, book_id)
-);
-
--- User Activity Log Table
-CREATE TABLE ActivityLogs (
-                              id BIGSERIAL PRIMARY KEY,
-                              user_id UUID REFERENCES Users(id) ON DELETE SET NULL,
-                              activity_type user_activity_type NOT NULL,
-                              target_id UUID,
-                              details JSONB,
-                              created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+-- Users Table  
+CREATE TABLE Users (  
+   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),  
+   name VARCHAR(255) NOT NULL,  
+   email VARCHAR(255) UNIQUE NOT NULL,  
+   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
+   updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP  
+);  
+  
+-- Authors Table  
+CREATE TABLE Authors (  
+	 id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),  
+	 name VARCHAR(255) NOT NULL,  
+	 bio TEXT,  
+	 user_id UUID UNIQUE REFERENCES Users(id) ON DELETE SET NULL,  
+	 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
+	 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP  
+);  
+  
+-- Genres Table  
+CREATE TABLE Genres (  
+	id SERIAL PRIMARY KEY,  
+	name VARCHAR(100) UNIQUE NOT NULL  
+);  
+  
+-- Books Table  
+CREATE TABLE Books (  
+   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+   goodreads_id INTEGER NOT NULL,
+   goodreads_url TEXT,
+   title VARCHAR(255) NOT NULL,
+   description TEXT,
+   publication_year INTEGER,
+   cover_image_url TEXT,
+   average_rating NUMERIC,
+   ratings_count INTEGER,
+   search_vector TSVECTOR,  
+   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
+   updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP  
+);  
+  
+-- Junction table for Books and Authors  
+CREATE TABLE BookAuthors (  
+	 book_id UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,  
+	 author_id UUID NOT NULL REFERENCES Authors(id) ON DELETE CASCADE,  
+	 PRIMARY KEY (book_id, author_id)  
+);  
+  
+-- Junction table for Books and Genres  
+CREATE TABLE BookGenres (  
+	book_id UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,  
+	genre_id INTEGER NOT NULL REFERENCES Genres(id) ON DELETE CASCADE,  
+	PRIMARY KEY (book_id, genre_id)  
+);  
+  
+-- Junction table for Similar Books  
+CREATE TABLE SimilarBooks (  
+	  book_id_1 UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,  
+	  book_id_2 UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,  
+	  PRIMARY KEY (book_id_1, book_id_2),  
+	  CONSTRAINT check_different_books CHECK (book_id_1 <> book_id_2),  
+	  CONSTRAINT check_ordered_pair CHECK (book_id_1 < book_id_2)  
+);  
+  
+-- Reviews/Posts Table  
+CREATE TABLE Reviews (  
+	 id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),  
+	 text TEXT NOT NULL,  
+	 rating SMALLINT,  
+	 book_id UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,  
+	 user_id UUID NOT NULL REFERENCES Users(id) ON DELETE CASCADE,  
+	 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
+	 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
+	 CONSTRAINT rating_range CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5))  
+);  
+  
+-- User Library Table  
+CREATE TABLE UserLibrary (  
+	 user_id UUID NOT NULL REFERENCES Users(id) ON DELETE CASCADE,  
+	 book_id UUID NOT NULL REFERENCES Books(id) ON DELETE CASCADE,  
+	 added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
+	 PRIMARY KEY (user_id, book_id)  
+);  
+  
+-- User Activity Log Table  
+CREATE TABLE ActivityLogs (  
+	  id BIGSERIAL PRIMARY KEY,  
+	  user_id UUID REFERENCES Users(id) ON DELETE SET NULL,  
+	  activity_type user_activity_type NOT NULL,  
+	  target_id UUID,  
+	  details JSONB,  
+	  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP  
 );
 
 -- Indexes (Remain the same)
