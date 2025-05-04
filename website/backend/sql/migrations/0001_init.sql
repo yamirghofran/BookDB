@@ -45,14 +45,14 @@ CREATE TABLE Genres (
 -- Books Table  
 CREATE TABLE Books (  
    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-   goodreads_id INTEGER NOT NULL,
+   goodreads_id BIGINT NOT NULL,
    goodreads_url TEXT,
    title VARCHAR(255) NOT NULL,
    description TEXT,
-   publication_year INTEGER,
+   publication_year BIGINT,
    cover_image_url TEXT,
    average_rating NUMERIC,
-   ratings_count INTEGER,
+   ratings_count BIGINT,
    search_vector TSVECTOR,  
    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP  
