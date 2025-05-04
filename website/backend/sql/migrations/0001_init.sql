@@ -29,9 +29,9 @@ CREATE TABLE Users (
 -- Authors Table  
 CREATE TABLE Authors (  
 	 id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),  
-	 name VARCHAR(255) NOT NULL,  
-	 bio TEXT,  
-	 user_id UUID UNIQUE REFERENCES Users(id) ON DELETE SET NULL,  
+	 name VARCHAR(255) NOT NULL,
+	 average_rating NUMERIC,
+	 ratings_count INTEGER,
 	 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
 	 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP  
 );  
