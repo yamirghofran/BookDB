@@ -32,6 +32,7 @@ try:
     reviews_df = pd.read_parquet('data/reduced_reviews.parquet')
     authors_df = pd.read_parquet('data/new_authors.parquet')
     users_df = pd.read_csv('data/user_id_map_reduced.csv') # Using the specified CSV
+    item_id_map_df = pd.read_csv('data/item_id_map_reduced.csv')  # Load book ncf_id mapping
 except FileNotFoundError as e:
     logging.error(f"Error loading data file: {e}. Make sure all files are in the 'data/' directory.")
     exit(1)
@@ -151,6 +152,7 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
 
     for _, row in users_df.iterrows():
         original_user_id_str = row['original_userId']
+        ncf_id = row['new_userId']
 
         if original_user_id_str in processed_original_user_ids: continue
         processed_original_user_ids.add(original_user_id_str)
@@ -167,6 +169,7 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
 
         users_to_insert.append((
             original_user_id_str,
+            ncf_id,
             fake.name(),
             user_email  # Use the generated UUID-based email
         ))
@@ -177,7 +180,7 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
     if users_to_insert:
         try:
             # --- Check for Duplicates within the Batch and Pre-existing Emails ---
-            all_emails_in_batch = [email for _, _, email in users_to_insert]
+            all_emails_in_batch = [email for _, _, _, email in users_to_insert]
             unique_emails_in_batch_set = set(all_emails_in_batch)
 
             # Check 1: Duplicates within the current batch
@@ -205,14 +208,14 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
                  logging.info("No email conflicts detected with existing data in the Users table.")
             # --- End Check ---
 
-            user_insert_tuples = [(uid, name, email) for uid, name, email in users_to_insert]
+            user_insert_tuples = [(uid, ncf_id, name, email) for uid, ncf_id, name, email in users_to_insert]
             extras.execute_values(
                 cursor,
                 # Note: Even with UUID-based emails, ON CONFLICT is kept as a safety measure,
                 # in case the script is run with the same users_df multiple times or if IDs repeat.
-                "INSERT INTO Users (id, name, email) VALUES %s ON CONFLICT (email) DO NOTHING RETURNING id",
+                "INSERT INTO Users (id, ncf_id, name, email) VALUES %s ON CONFLICT (email) DO NOTHING RETURNING id",
                 user_insert_tuples,
-                template="(%s, %s, %s)"
+                template="(%s, %s, %s, %s)"
             )
             inserted_ids_from_db = [item[0] for item in cursor.fetchall()]
             inserted_user_ids.update(inserted_ids_from_db)
@@ -250,6 +253,9 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
     similar_book_relations = set()
     all_genres = set()
     processed_goodreads_book_ids = set()
+
+    # --- Book ncf_id Mapping ---
+    book_ncf_id_map = dict(zip(item_id_map_df['original_itemId'], item_id_map_df['new_itemId']))
 
     # --- FIX: Added specific check for Pandas Ambiguity Error ---
     try:
@@ -302,19 +308,13 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
         avg_rating = safe_to_float(row['average_rating'])
         ratings_cnt = safe_to_int(row['ratings_count']) # Ensure this is int or None
 
-        # --- Check ratings_cnt range again just before append (optional paranoia) ---
-        # bigint_max = 9223372036854775807
-        # bigint_min = -9223372036854775808
-        # if ratings_cnt is not None and not (bigint_min <= ratings_cnt <= bigint_max):
-        #     logging.warning(f"Skipping book {goodreads_book_id}: ratings_count {ratings_cnt} is out of bigint range just before insertion.")
-        #     processed_goodreads_book_ids.add(goodreads_book_id) # Mark as processed to avoid re-adding relations
-        #     del book_mapping[goodreads_book_id] # Remove from mapping
-        #     continue
-        # --- End optional check ---
-
+        # --- Get ncf_id for this book ---
+        ncf_id_raw = book_ncf_id_map.get(goodreads_book_id)
+        ncf_id = safe_to_int(ncf_id_raw) if ncf_id_raw is not None else None
 
         books_to_insert.append((
             new_book_uuid,
+            ncf_id,
             goodreads_book_id, # Already confirmed as int or None
             row['url'],
             row['title_without_series'],
@@ -365,20 +365,28 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
     logging.info(f"Inserting {len(books_to_insert)} books...")
     if books_to_insert:
         try:
+            if books_to_insert:
+                print("Sample book tuple:", books_to_insert[0])
+                print("Tuple length:", len(books_to_insert[0]))
+                print("Expecting 10 columns for Books insert")
             # --- Add Debugging: Check min/max values before insert ---
-            goodreads_ids = [b[1] for b in books_to_insert if b[1] is not None] # Index 1 is goodreads_id
-            ratings_counts = [b[8] for b in books_to_insert if b[8] is not None] # Index 8 is ratings_count
-            pub_years = [b[5] for b in books_to_insert if b[5] is not None] # Index 5 is publication_year
+            goodreads_ids = [b[2] for b in books_to_insert if len(b) > 2 and b[2] is not None] # Index 2 is goodreads_id
+            ratings_counts = [b[9] for b in books_to_insert if len(b) > 9 and b[9] is not None] # Index 9 is ratings_count
+            pub_years = [b[6] for b in books_to_insert if len(b) > 6 and b[6] is not None] # Index 6 is publication_year
 
-            if goodreads_ids:
-                logging.debug(f"Book Insert Debug: Goodreads ID range: min={min(goodreads_ids)}, max={max(goodreads_ids)}")
-            if ratings_counts:
-                logging.debug(f"Book Insert Debug: Ratings Count range: min={min(ratings_counts)}, max={max(ratings_counts)}")
-            if pub_years:
-                 logging.debug(f"Book Insert Debug: Publication Year range: min={min(pub_years)}, max={max(pub_years)}")
-            # --- End Debugging ---
+            if books_to_insert:
+                for i, book_tuple in enumerate(books_to_insert[:5]):
+                    print(f"Book tuple {i}: {book_tuple} (length: {len(book_tuple)})")
 
-            extras.execute_values(cursor, "INSERT INTO Books (id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count) VALUES %s", books_to_insert, template="(%s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            # Defensive: check all tuples are length 10
+            bad_tuples = [i for i, t in enumerate(books_to_insert) if len(t) != 10]
+            if bad_tuples:
+                print(f"ERROR: Found {len(bad_tuples)} tuples with wrong length. Example indices: {bad_tuples[:5]}")
+                for idx in bad_tuples[:5]:
+                    print(f"Bad tuple at index {idx}: {books_to_insert[idx]} (length: {len(books_to_insert[idx])})")
+                raise ValueError(f"Books to insert contains tuples of wrong length. See printed output above.")
+
+            extras.execute_values(cursor, "INSERT INTO Books (id, ncf_id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count) VALUES %s", books_to_insert, template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         except Exception as e:
             # --- Add Enhanced Error Logging ---
             logging.error(f"Error inserting books: {e}")
@@ -393,7 +401,7 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
             #         if "out of range" in str(row_e):
             #              logging.error(f"Row {i} likely caused 'out of range' error: {book_tuple}")
             #              # Log specific problematic values
-            #              logging.error(f"  goodreads_id: {book_tuple[1]}, ratings_count: {book_tuple[8]}, pub_year: {book_tuple[5]}")
+            #              logging.error(f"  goodreads_id: {book_tuple[2]}, ratings_count: {book_tuple[10]}, pub_year: {book_tuple[6]}")
             #              break # Stop after finding the first error
             # --- End Enhanced Error Logging ---
             conn.rollback(); return
