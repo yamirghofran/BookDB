@@ -19,7 +19,8 @@ CREATE TYPE user_activity_type AS ENUM (
 
 -- Users Table  
 CREATE TABLE Users (  
-   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),  
+   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+   ncf_id INTEGER,
    name VARCHAR(255) NOT NULL,  
    email VARCHAR(255) UNIQUE NOT NULL,  
    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  
@@ -45,6 +46,7 @@ CREATE TABLE Genres (
 -- Books Table  
 CREATE TABLE Books (  
    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+   ncf_id INTEGER,
    goodreads_id BIGINT NOT NULL,
    goodreads_url TEXT,
    title VARCHAR(255) NOT NULL,
