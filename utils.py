@@ -50,7 +50,7 @@ def upload_to_r2(files, bucket_name):
 
 # Upload files
 # files_to_upload = [
-#     ("data/interactions_prepared_ncf.parquet", "data/interactions_prepared_ncf.parquet"),
+#     ("data/bookdb.sql", "db/bookdb.sql"),
 # ]
 
 #upload_to_r2(files_to_upload, "bookdbio")
