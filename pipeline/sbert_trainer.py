@@ -17,6 +17,9 @@ import json
 import random
 from datasets import load_dataset
 from typing import Dict, List, Tuple, Any, Optional
+from ..pipeline import PipelineStep
+from ..utils import get_device
+
 
 # --- Configuration ---
 RANDOM_STATE = 42
@@ -51,20 +54,6 @@ random.seed(RANDOM_STATE)
 os.makedirs(OUTPUT_BASE_PATH, exist_ok=True)
 os.makedirs(EVAL_OUTPUT_PATH, exist_ok=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# --- Helper Functions ---
-
-def get_device() -> str:
-    """Determines the best available device (MPS, CUDA, CPU)."""
-    if torch.backends.mps.is_available():
-        logging.info("Using Apple Metal Performance Shaders (MPS).")
-        return "mps"
-    elif torch.cuda.is_available():
-        logging.info("Using CUDA.")
-        return "cuda"
-    else:
-        logging.warning("Training on CPU will be very slow.")
-        return "cpu"
 
 # --- Classes ---
 
@@ -606,121 +595,139 @@ class ResultVisualizer:
         plt.close() # Close plot
 
 
-# --- Pipeline Orchestrator ---
-
-class FineTuningPipeline:
-    """Orchestrates the fine-tuning process."""
-    def __init__(self, config: Dict):
-        self.config = config
+class SbertTrainerStep(PipelineStep):
+    def __init__(self, name: str):
+        super().__init__(name)
+        # Defaults (can be overridden by config)
+        self.random_state = 42
+        self.model_name = 'all-MiniLM-L6-v2'
+        self.books_data_file = "data/reduced_books.parquet"
+        self.authors_data_file = "data/new_authors.parquet"
+        self.book_texts_file = "data/book_texts.parquet"
+        self.triplets_data_file = "data/books_triplets.parquet"
+        self.output_base_path = "sbert-output/finetuning-all-MiniLM-L6-v2-books"
+        self.eval_output_path = os.path.join(self.output_base_path, 'eval')
+        self.checkpoint_path = os.path.join(self.output_base_path, 'checkpoints')
+        self.batch_size = 32
+        self.epochs = 4
+        self.learning_rate = 2e-5
+        self.triplet_margin = 0.5
+        self.warmup_steps_ratio = 0.1
+        self.evaluation_steps = 500
+        self.save_steps = 1000
+        self.checkpoint_limit = 2
+        self.test_split_size = 0.2
+        self.validation_split_size = 0.5
+        self.max_negative_search_attempts = 100
         self.device = get_device()
+        self._set_seed()
 
-        # Initialize components
-        self.loader_analyzer = DataLoaderAnalyzer(
-            books_path=config['books_data_file'],
-            authors_path=config['authors_data_file']
-        )
-        # TextPreprocessor needs loaded data, initialized later
-        # TripletGenerator needs preprocessed data, initialized later
-        self.dataset_splitter = DatasetSplitter(
-            data_path=config['triplets_data_file'],
-            test_size=config['test_split_size'],
-            val_size=config['validation_split_size'],
-            seed=config['random_state']
-        )
-        self.trainer_evaluator = ModelTrainerEvaluator(
-            model_name=config['model_name'],
-            output_path=config['output_base_path'],
-            eval_output_path=config['eval_output_path'],
-            checkpoint_path=config['checkpoint_path'],
-            device=self.device,
-            config={ # Pass relevant hyperparameters
-                'batch_size': config['batch_size'],
-                'epochs': config['epochs'],
-                'learning_rate': config['learning_rate'],
-                'triplet_margin': config['triplet_margin'],
-                'warmup_steps_ratio': config['warmup_steps_ratio'],
-                'evaluation_steps': config['evaluation_steps'],
-                'save_steps': config['save_steps'],
-                'checkpoint_limit': config['checkpoint_limit']
-            }
-        )
-        self.visualizer = ResultVisualizer(
-             eval_output_path=config['eval_output_path'],
-             output_base_path=config['output_base_path']
-        )
+    def _set_seed(self):
+        np.random.seed(self.random_state)
+        torch.manual_seed(self.random_state)
+        random.seed(self.random_state)
 
-    def run(self):
-        """Executes the pipeline steps."""
-        logging.info("Starting Fine-Tuning Pipeline...")
+    def configure(self, config: Dict[str, Any]) -> None:
+        super().configure(config)
+        self.random_state = self.config.get('random_state', self.random_state)
+        self.model_name = self.config.get('model_name', self.model_name)
+        self.books_data_file = self.config.get('books_data_file', self.books_data_file)
+        self.authors_data_file = self.config.get('authors_data_file', self.authors_data_file)
+        self.book_texts_file = self.config.get('book_texts_file', self.book_texts_file)
+        self.triplets_data_file = self.config.get('triplets_data_file', self.triplets_data_file)
+        self.output_base_path = self.config.get('output_base_path', self.output_base_path)
+        self.eval_output_path = self.config.get('eval_output_path', os.path.join(self.output_base_path, 'eval'))
+        self.checkpoint_path = self.config.get('checkpoint_path', os.path.join(self.output_base_path, 'checkpoints'))
+        self.batch_size = self.config.get('batch_size', self.batch_size)
+        self.epochs = self.config.get('epochs', self.epochs)
+        self.learning_rate = self.config.get('learning_rate', self.learning_rate)
+        self.triplet_margin = self.config.get('triplet_margin', self.triplet_margin)
+        self.warmup_steps_ratio = self.config.get('warmup_steps_ratio', self.warmup_steps_ratio)
+        self.evaluation_steps = self.config.get('evaluation_steps', self.evaluation_steps)
+        self.save_steps = self.config.get('save_steps', self.save_steps)
+        self.checkpoint_limit = self.config.get('checkpoint_limit', self.checkpoint_limit)
+        self.test_split_size = self.config.get('test_split_size', self.test_split_size)
+        self.validation_split_size = self.config.get('validation_split_size', self.validation_split_size)
+        self.max_negative_search_attempts = self.config.get('max_negative_search_attempts', self.max_negative_search_attempts)
+        os.makedirs(self.output_base_path, exist_ok=True)
+        os.makedirs(self.eval_output_path, exist_ok=True)
+        self.device = get_device()
+        self._set_seed()
 
+    def run(self) -> Dict[str, Any]:
+        self.logger.info("Starting SBERT fine-tuning step...")
+        outputs = {}
         # 1. Load and Analyze Data
-        self.loader_analyzer.run_analysis()
-        books_df, authors_df = self.loader_analyzer.get_dataframes()
-
+        loader_analyzer = DataLoaderAnalyzer(
+            books_path=self.books_data_file,
+            authors_path=self.authors_data_file
+        )
+        loader_analyzer.run_analysis()
+        books_df, authors_df = loader_analyzer.get_dataframes()
         # 2. Preprocess Text Data
-        # Initialize now that data is loaded
         text_preprocessor = TextPreprocessor(
             books_df=books_df,
             authors_df=authors_df,
-            output_path=self.config['book_texts_file']
+            output_path=self.book_texts_file
         )
-        book_texts_df = text_preprocessor.get_book_texts_df() # Generates/saves if needed
-
+        book_texts_df = text_preprocessor.get_book_texts_df()
+        outputs["book_texts_parquet"] = self.book_texts_file
         # 3. Generate Triplets
-        # Initialize now that text data is ready
         triplet_generator = TripletGenerator(
             books_df=books_df,
             book_texts_df=book_texts_df,
-            output_path=self.config['triplets_data_file'],
-            max_neg_attempts=self.config['max_negative_search_attempts']
+            output_path=self.triplets_data_file,
+            max_neg_attempts=self.max_negative_search_attempts
         )
-        triplet_generator.get_triplets_df() # Generates/saves if needed
-
+        triplet_generator.get_triplets_df()
+        outputs["triplets_parquet"] = self.triplets_data_file
         # 4. Split Data
-        train_ds, val_ds, test_ds = self.dataset_splitter.get_datasets()
-        val_anchors, val_positives, val_negatives = self.dataset_splitter.get_split_texts('validation')
-        test_anchors, test_positives, test_negatives = self.dataset_splitter.get_split_texts('test')
-
+        dataset_splitter = DatasetSplitter(
+            data_path=self.triplets_data_file,
+            test_size=self.test_split_size,
+            val_size=self.validation_split_size,
+            seed=self.random_state
+        )
+        train_ds, val_ds, test_ds = dataset_splitter.get_datasets()
+        val_anchors, val_positives, val_negatives = dataset_splitter.get_split_texts('validation')
+        test_anchors, test_positives, test_negatives = dataset_splitter.get_split_texts('test')
         # 5. Evaluate Baseline Model
-        baseline_acc = self.trainer_evaluator.evaluate_baseline(test_anchors, test_positives, test_negatives)
-
+        trainer_evaluator = ModelTrainerEvaluator(
+            model_name=self.model_name,
+            output_path=self.output_base_path,
+            eval_output_path=self.eval_output_path,
+            checkpoint_path=self.checkpoint_path,
+            device=self.device,
+            config={
+                'batch_size': self.batch_size,
+                'epochs': self.epochs,
+                'learning_rate': self.learning_rate,
+                'triplet_margin': self.triplet_margin,
+                'warmup_steps_ratio': self.warmup_steps_ratio,
+                'evaluation_steps': self.evaluation_steps,
+                'save_steps': self.save_steps,
+                'checkpoint_limit': self.checkpoint_limit
+            }
+        )
+        baseline_acc = trainer_evaluator.evaluate_baseline(test_anchors, test_positives, test_negatives)
         # 6. Train Model
-        self.trainer_evaluator.train(train_ds, val_anchors, val_positives, val_negatives)
-
+        trainer_evaluator.train(train_ds, val_anchors, val_positives, val_negatives)
         # 7. Evaluate Fine-tuned Model
-        finetuned_acc = self.trainer_evaluator.evaluate_finetuned(test_anchors, test_positives, test_negatives)
-
+        finetuned_acc = trainer_evaluator.evaluate_finetuned(test_anchors, test_positives, test_negatives)
+        outputs["baseline_accuracy"] = baseline_acc
+        outputs["finetuned_accuracy"] = finetuned_acc
+        outputs["best_model_path"] = self.output_base_path
+        outputs["eval_output_path"] = self.eval_output_path
+        outputs["checkpoint_path"] = self.checkpoint_path
         # 8. Visualize Results
-        self.visualizer.plot_validation_accuracy()
-        self.visualizer.plot_comparison(baseline_acc, finetuned_acc)
-
-        logging.info("Fine-Tuning Pipeline Finished Successfully.")
-
-
-# --- Main Execution ---
-if __name__ == "__main__":
-    pipeline_config = {
-        'random_state': RANDOM_STATE,
-        'model_name': MODEL_NAME,
-        'books_data_file': BOOKS_DATA_FILE,
-        'authors_data_file': AUTHORS_DATA_FILE,
-        'book_texts_file': BOOK_TEXTS_FILE,
-        'triplets_data_file': TRIPLETS_DATA_FILE,
-        'output_base_path': OUTPUT_BASE_PATH,
-        'eval_output_path': EVAL_OUTPUT_PATH,
-        'checkpoint_path': CHECKPOINT_PATH,
-        'batch_size': BATCH_SIZE,
-        'epochs': EPOCHS,
-        'learning_rate': LEARNING_RATE,
-        'triplet_margin': TRIPLET_MARGIN,
-        'warmup_steps_ratio': WARMUP_STEPS_RATIO,
-        'evaluation_steps': EVALUATION_STEPS,
-        'save_steps': SAVE_STEPS,
-        'checkpoint_limit': CHECKPOINT_LIMIT,
-        'test_split_size': TEST_SPLIT_SIZE,
-        'validation_split_size': VALIDATION_SPLIT_SIZE,
-        'max_negative_search_attempts': MAX_NEGATIVE_SEARCH_ATTEMPTS
-    }
-
-    pipeline = FineTuningPipeline(pipeline_config)
-    pipeline.run()
+        visualizer = ResultVisualizer(
+            eval_output_path=self.eval_output_path,
+            output_base_path=self.output_base_path
+        )
+        visualizer.plot_validation_accuracy()
+        visualizer.plot_comparison(baseline_acc, finetuned_acc)
+        outputs["validation_plot"] = os.path.join(self.output_base_path, 'validation_accuracy_plot.png')
+        outputs["comparison_plot"] = os.path.join(self.output_base_path, 'comparison_accuracy_plot.png')
+        self.logger.info("SBERT fine-tuning step finished.")
+        self.output_data = outputs
+        return outputs

@@ -3,6 +3,8 @@ import boto3
 from botocore.config import Config
 import os
 from dotenv import load_dotenv
+import torch
+import logging
 
 load_dotenv()
 
@@ -82,3 +84,15 @@ def download_from_r2(object_name, local_path, bucket_name="bookdbio"):
 
 # Example usage:
 # download_from_r2("data/reviews_dedup.parquet", "data/reviews_dedup.parquet")
+
+def get_device() -> str:
+    """Determines the best available device (MPS, CUDA, CPU)."""
+    if torch.backends.mps.is_available():
+        logging.info("Using Apple Metal Performance Shaders (MPS).")
+        return "mps"
+    elif torch.cuda.is_available():
+        logging.info("Using CUDA.")
+        return "cuda"
+    else:
+        logging.warning("Training on CPU will be very slow.")
+        return "cpu"
