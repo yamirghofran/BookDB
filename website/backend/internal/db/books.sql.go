@@ -18,7 +18,7 @@ INSERT INTO Books (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8
 )
-RETURNING id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count, search_vector, created_at, updated_at
+RETURNING id, ncf_id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count, search_vector, created_at, updated_at
 `
 
 type CreateBookParams struct {
@@ -46,6 +46,7 @@ func (q *Queries) CreateBook(ctx context.Context, arg CreateBookParams) (Book, e
 	var i Book
 	err := row.Scan(
 		&i.ID,
+		&i.NcfID,
 		&i.GoodreadsID,
 		&i.GoodreadsUrl,
 		&i.Title,
@@ -402,7 +403,7 @@ SET
   ratings_count = COALESCE($8, ratings_count),
   updated_at = CURRENT_TIMESTAMP -- Trigger handles search_vector update
 WHERE id = $9
-RETURNING id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count, search_vector, created_at, updated_at
+RETURNING id, ncf_id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count, search_vector, created_at, updated_at
 `
 
 type UpdateBookParams struct {
@@ -432,6 +433,7 @@ func (q *Queries) UpdateBook(ctx context.Context, arg UpdateBookParams) (Book, e
 	var i Book
 	err := row.Scan(
 		&i.ID,
+		&i.NcfID,
 		&i.GoodreadsID,
 		&i.GoodreadsUrl,
 		&i.Title,

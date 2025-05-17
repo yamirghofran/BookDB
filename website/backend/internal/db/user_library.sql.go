@@ -27,22 +27,37 @@ func (q *Queries) AddBookToLibrary(ctx context.Context, arg AddBookToLibraryPara
 }
 
 const getUserLibrary = `-- name: GetUserLibrary :many
-SELECT b.id, b.goodreads_id, b.goodreads_url, b.title, b.description, b.publication_year, b.cover_image_url, b.average_rating, b.ratings_count, b.search_vector, b.created_at, b.updated_at -- Select book details
+SELECT b.id, b.goodreads_id, b.goodreads_url, b.title, b.description, b.publication_year, b.cover_image_url, b.average_rating, b.ratings_count, b.search_vector::text AS search_vector, b.created_at, b.updated_at -- Select book details
 FROM Books b
 JOIN UserLibrary ul ON b.id = ul.book_id
 WHERE ul.user_id = $1
 ORDER BY ul.added_at DESC
 `
 
-func (q *Queries) GetUserLibrary(ctx context.Context, userID pgtype.UUID) ([]Book, error) {
+type GetUserLibraryRow struct {
+	ID              pgtype.UUID
+	GoodreadsID     int64
+	GoodreadsUrl    pgtype.Text
+	Title           string
+	Description     pgtype.Text
+	PublicationYear pgtype.Int8
+	CoverImageUrl   pgtype.Text
+	AverageRating   pgtype.Numeric
+	RatingsCount    pgtype.Int8
+	SearchVector    string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
+func (q *Queries) GetUserLibrary(ctx context.Context, userID pgtype.UUID) ([]GetUserLibraryRow, error) {
 	rows, err := q.db.Query(ctx, getUserLibrary, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Book
+	var items []GetUserLibraryRow
 	for rows.Next() {
-		var i Book
+		var i GetUserLibraryRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.GoodreadsID,

@@ -30,7 +30,7 @@ func (q *Queries) AddSimilarBook(ctx context.Context, arg AddSimilarBookParams) 
 }
 
 const getSimilarBookDetails = `-- name: GetSimilarBookDetails :many
-SELECT b.id, b.goodreads_id, b.goodreads_url, b.title, b.description, b.publication_year, b.cover_image_url, b.average_rating, b.ratings_count, b.search_vector, b.created_at, b.updated_at
+SELECT b.id, b.ncf_id, b.goodreads_id, b.goodreads_url, b.title, b.description, b.publication_year, b.cover_image_url, b.average_rating, b.ratings_count, b.search_vector, b.created_at, b.updated_at
 FROM Books b
 JOIN (
     SELECT book_id_2 AS similar_id FROM SimilarBooks WHERE SimilarBooks.book_id_1 = $1
@@ -51,6 +51,7 @@ func (q *Queries) GetSimilarBookDetails(ctx context.Context, bookID1 pgtype.UUID
 		var i Book
 		if err := rows.Scan(
 			&i.ID,
+			&i.NcfID,
 			&i.GoodreadsID,
 			&i.GoodreadsUrl,
 			&i.Title,

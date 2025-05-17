@@ -82,6 +82,7 @@ type Author struct {
 
 type Book struct {
 	ID              pgtype.UUID
+	NcfID           pgtype.Int4
 	GoodreadsID     int64
 	GoodreadsUrl    pgtype.Text
 	Title           string
@@ -127,6 +128,7 @@ type Similarbook struct {
 
 type User struct {
 	ID        pgtype.UUID
+	NcfID     pgtype.Int4
 	Name      string
 	Email     string
 	CreatedAt pgtype.Timestamptz
