@@ -11,17 +11,16 @@
 // Import Routes
 
 import { Route as rootRoute } from './routes/__root'
-import { Route as AuthorsImport } from './routes/authors'
+import { Route as LibraryImport } from './routes/library'
 import { Route as IndexImport } from './routes/index'
 import { Route as DemoTanstackQueryImport } from './routes/demo.tanstack-query'
 import { Route as BooksIdImport } from './routes/books.$id'
-import { Route as AuthorsIdImport } from './routes/authors.$id'
 
 // Create/Update Routes
 
-const AuthorsRoute = AuthorsImport.update({
-  id: '/authors',
-  path: '/authors',
+const LibraryRoute = LibraryImport.update({
+  id: '/library',
+  path: '/library',
   getParentRoute: () => rootRoute,
 } as any)
 
@@ -43,12 +42,6 @@ const BooksIdRoute = BooksIdImport.update({
   getParentRoute: () => rootRoute,
 } as any)
 
-const AuthorsIdRoute = AuthorsIdImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => AuthorsRoute,
-} as any)
-
 // Populate the FileRoutesByPath interface
 
 declare module '@tanstack/react-router' {
@@ -60,19 +53,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexImport
       parentRoute: typeof rootRoute
     }
-    '/authors': {
-      id: '/authors'
-      path: '/authors'
-      fullPath: '/authors'
-      preLoaderRoute: typeof AuthorsImport
+    '/library': {
+      id: '/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof LibraryImport
       parentRoute: typeof rootRoute
-    }
-    '/authors/$id': {
-      id: '/authors/$id'
-      path: '/$id'
-      fullPath: '/authors/$id'
-      preLoaderRoute: typeof AuthorsIdImport
-      parentRoute: typeof AuthorsImport
     }
     '/books/$id': {
       id: '/books/$id'
@@ -93,29 +79,16 @@ declare module '@tanstack/react-router' {
 
 // Create and export the route tree
 
-interface AuthorsRouteChildren {
-  AuthorsIdRoute: typeof AuthorsIdRoute
-}
-
-const AuthorsRouteChildren: AuthorsRouteChildren = {
-  AuthorsIdRoute: AuthorsIdRoute,
-}
-
-const AuthorsRouteWithChildren =
-  AuthorsRoute._addFileChildren(AuthorsRouteChildren)
-
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/authors': typeof AuthorsRouteWithChildren
-  '/authors/$id': typeof AuthorsIdRoute
+  '/library': typeof LibraryRoute
   '/books/$id': typeof BooksIdRoute
   '/demo/tanstack-query': typeof DemoTanstackQueryRoute
 }
 
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/authors': typeof AuthorsRouteWithChildren
-  '/authors/$id': typeof AuthorsIdRoute
+  '/library': typeof LibraryRoute
   '/books/$id': typeof BooksIdRoute
   '/demo/tanstack-query': typeof DemoTanstackQueryRoute
 }
@@ -123,42 +96,30 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRoute
   '/': typeof IndexRoute
-  '/authors': typeof AuthorsRouteWithChildren
-  '/authors/$id': typeof AuthorsIdRoute
+  '/library': typeof LibraryRoute
   '/books/$id': typeof BooksIdRoute
   '/demo/tanstack-query': typeof DemoTanstackQueryRoute
 }
 
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/authors'
-    | '/authors/$id'
-    | '/books/$id'
-    | '/demo/tanstack-query'
+  fullPaths: '/' | '/library' | '/books/$id' | '/demo/tanstack-query'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/authors' | '/authors/$id' | '/books/$id' | '/demo/tanstack-query'
-  id:
-    | '__root__'
-    | '/'
-    | '/authors'
-    | '/authors/$id'
-    | '/books/$id'
-    | '/demo/tanstack-query'
+  to: '/' | '/library' | '/books/$id' | '/demo/tanstack-query'
+  id: '__root__' | '/' | '/library' | '/books/$id' | '/demo/tanstack-query'
   fileRoutesById: FileRoutesById
 }
 
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AuthorsRoute: typeof AuthorsRouteWithChildren
+  LibraryRoute: typeof LibraryRoute
   BooksIdRoute: typeof BooksIdRoute
   DemoTanstackQueryRoute: typeof DemoTanstackQueryRoute
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AuthorsRoute: AuthorsRouteWithChildren,
+  LibraryRoute: LibraryRoute,
   BooksIdRoute: BooksIdRoute,
   DemoTanstackQueryRoute: DemoTanstackQueryRoute,
 }
@@ -174,7 +135,7 @@ export const routeTree = rootRoute
       "filePath": "__root.tsx",
       "children": [
         "/",
-        "/authors",
+        "/library",
         "/books/$id",
         "/demo/tanstack-query"
       ]
@@ -182,15 +143,8 @@ export const routeTree = rootRoute
     "/": {
       "filePath": "index.tsx"
     },
-    "/authors": {
-      "filePath": "authors.tsx",
-      "children": [
-        "/authors/$id"
-      ]
-    },
-    "/authors/$id": {
-      "filePath": "authors.$id.tsx",
-      "parent": "/authors"
+    "/library": {
+      "filePath": "library.tsx"
     },
     "/books/$id": {
       "filePath": "books.$id.tsx"

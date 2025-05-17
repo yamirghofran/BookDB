@@ -29,4 +29,16 @@ export interface Book {
     rating?: number
     userAvatar?: string
   }
-  
+
+export interface UserInLibrary {
+  id: string;
+  name: string;
+  // avatarUrl?: string; // Add if you include this from the backend
+}
+
+export interface PaginatedUsersResponse {
+  users: UserInLibrary[];
+  totalUsers: number;
+  page: number;
+  limit: number;
+}

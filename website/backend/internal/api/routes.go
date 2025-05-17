@@ -63,7 +63,7 @@ func (s *Server) setupRouter() {
 			books.PUT("/:id", s.Handlers.UpdateBook)
 			books.DELETE("/:id", s.Handlers.DeleteBook)
 			books.GET("/search", s.Handlers.SearchBooksByContent)
-
+			books.GET("/:id/library-users", s.Handlers.GetUsersWithBookInLibrary) // Changed route
 		}
 
 		// People endpoints

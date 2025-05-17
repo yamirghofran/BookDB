@@ -1,16 +1,17 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { ArrowLeft, MessageSquare, Star } from "lucide-react" // Added Star
+import { ArrowLeft, MessageSquare, Star, Heart } from "lucide-react" // Added Star and Heart
 import { Link } from "@tanstack/react-router"
 import { useQuery, keepPreviousData } from "@tanstack/react-query" // Imported keepPreviousData
-import { fetchBookById, fetchSimilarBooks } from "@/lib/api"
+import { fetchBookById, fetchSimilarBooks, fetchUsersWithBookInLibrary } from "@/lib/api"
 import BookCarousel from "@/components/book-carousel"
 import ReviewCard from "@/components/review-card"
 import AddReviewForm from "@/components/add-review-form"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import type { Book, Review } from "@/lib/types" // Removed Author type for now
+import type { Book, Review, UserInLibrary, PaginatedUsersResponse } from "@/lib/types"
+import { useUserLibrary } from "@/contexts/UserLibraryContext" // Import the hook
 import { createFileRoute } from "@tanstack/react-router"
 
 // Define the Route using createFileRoute
@@ -20,12 +21,15 @@ export const Route = createFileRoute("/books/$id")({
 
 function BookDetailsPage() {
 	const { id: bookId } = Route.useParams()
+	const { isBookLiked, addBookToLibrary, removeBookFromLibrary } = useUserLibrary()
 	const [reviews, setReviews] = useState<Review[]>([])
 	const [isReviewFormOpen, setIsReviewFormOpen] = useState(false)
 	const [currentReviewPage, setCurrentReviewPage] = useState(1)
 	const [reviewsTotalCount, setReviewsTotalCount] = useState(0)
 	const reviewsPerPage = 6 // Display 6 reviews per page (fits 2 rows in a 3-col grid)
 
+	const [currentUsersInLibraryPage, setCurrentUsersInLibraryPage] = useState(1)
+	const usersInLibraryPerPage = 9 // 3 columns * 3 rows for example
 
 	const {
 	   data: book,
@@ -57,9 +61,24 @@ function BookDetailsPage() {
 		queryFn: () => fetchSimilarBooks(bookId),
 		enabled: !!bookId, // Only run query if bookId is available
 	})
-  
-  // Effect to set local reviews if book data includes them (currently it doesn't from API)
-  // This part might need adjustment if/when reviews are fetched from backend
+
+	const {
+		data: usersInLibraryData,
+		isLoading: isLoadingUsersInLibrary,
+		// error: usersInLibraryError, // Can be used if needed
+	} = useQuery<PaginatedUsersResponse, Error>({
+		queryKey: ["usersInLibrary", bookId, currentUsersInLibraryPage] as const,
+		queryFn: () =>
+			fetchUsersWithBookInLibrary(bookId, {
+				limit: usersInLibraryPerPage,
+				offset: (currentUsersInLibraryPage - 1) * usersInLibraryPerPage,
+			}),
+		enabled: !!bookId,
+		placeholderData: keepPreviousData,
+	})
+		
+		// Effect to set local reviews if book data includes them (currently it doesn't from API)
+		// This part might need adjustment if/when reviews are fetched from backend
   useEffect(() => {
     if (book) {
       setReviews(book.reviews || []);
@@ -168,7 +187,26 @@ function BookDetailsPage() {
 							className="object-cover w-full h-full"
 						/>
 					</div>
-					<Button className="w-full" variant="outline" >Add to Library</Button>
+					<Button
+						className="w-full flex items-center justify-center gap-2"
+						variant="outline"
+						onClick={(e) => {
+							e.preventDefault()
+							e.stopPropagation()
+							if (isBookLiked(book.id)) {
+								removeBookFromLibrary(book.id)
+							} else {
+								addBookToLibrary(book.id)
+							}
+						}}
+					>
+						<Heart
+							className={`h-5 w-5 transition-colors ${
+								isBookLiked(book.id) ? "fill-red-500 text-red-500" : "text-muted-foreground"
+							}`}
+						/>
+						<span>{isBookLiked(book.id) ? "Remove from Library" : "Add to Library"}</span>
+					</Button>
 				</div>
 
 				{/* Book details */}
@@ -275,6 +313,53 @@ function BookDetailsPage() {
 					)}
 				</div>
 			</div>
+
+			{/* Users in Library Section */}
+			<div className="w-full mt-12">
+				<div className="bg-card border rounded-lg p-6">
+					<h2 className="text-xl font-semibold mb-6">In {usersInLibraryData?.totalUsers || 0} Libraries</h2>
+					{isLoadingUsersInLibrary && !usersInLibraryData && <p>Loading users...</p>}
+					{/* {usersInLibraryError && <p className="text-red-500">Error loading users.</p>} */}
+					{usersInLibraryData && usersInLibraryData.users.length > 0 ? (
+						<>
+							<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+								{usersInLibraryData.users.map((user: UserInLibrary) => (
+									<div key={user.id} className="border p-3 rounded-md bg-background shadow-sm">
+										{/* Placeholder for avatar - replace with actual img if available */}
+										<div className="w-10 h-10 bg-muted rounded-full mb-2 mx-auto"></div>
+										<p className="text-sm font-medium text-center truncate">{user.name}</p>
+									</div>
+								))}
+							</div>
+							{/* Pagination for users in library */}
+							{usersInLibraryData.totalUsers > usersInLibraryPerPage && (
+								<div className="mt-8 flex justify-center items-center space-x-4">
+									<Button
+										onClick={() => setCurrentUsersInLibraryPage((prev) => Math.max(prev - 1, 1))}
+										disabled={currentUsersInLibraryPage === 1 || isLoadingUsersInLibrary}
+									>
+										Previous
+									</Button>
+									<span className="text-sm text-muted-foreground">
+										Page {currentUsersInLibraryPage} of {Math.ceil(usersInLibraryData.totalUsers / usersInLibraryPerPage)}
+									</span>
+									<Button
+										onClick={() => setCurrentUsersInLibraryPage((prev) => Math.min(prev + 1, Math.ceil(usersInLibraryData.totalUsers / usersInLibraryPerPage)))}
+										disabled={currentUsersInLibraryPage === Math.ceil(usersInLibraryData.totalUsers / usersInLibraryPerPage) || isLoadingUsersInLibrary}
+									>
+										Next
+									</Button>
+								</div>
+							)}
+						</>
+					) : (
+						!isLoadingUsersInLibrary && (
+							<p className="text-muted-foreground text-center py-4">No users have this book in their library yet.</p>
+						)
+					)}
+				</div>
+			</div>
+
 
 			{/* Review form modal */}
 			<AddReviewForm

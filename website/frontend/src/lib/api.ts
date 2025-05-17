@@ -37,7 +37,7 @@ export async function addPerson(personData: AddPersonPayload): Promise<Person> {
   return response.json();
 }
 
-import type { Book as BookFromTypes } from "./types";
+import type { Book as BookFromTypes, PaginatedUsersResponse } from "./types";
 
 // Interface representing the raw book structure from the backend API
 interface RawBookFromAPI {
@@ -248,6 +248,42 @@ export async function fetchSimilarBooks(bookId: string): Promise<BookFromTypes[]
                  : String(rawBook.Description),
     genre: [], // Defaulting
   }));
+}
+
+export interface FetchUsersWithBookParams {
+  limit?: number;
+  offset?: number;
+}
+
+export async function fetchUsersWithBookInLibrary(
+  bookId: string,
+  params?: FetchUsersWithBookParams,
+): Promise<PaginatedUsersResponse> {
+  const path = `${API_BASE_URL}/books/${bookId}/library-users`; // Updated path
+  const fullUrl = new URL(path, window.location.origin);
+  if (params?.limit !== undefined) {
+    fullUrl.searchParams.append("limit", String(params.limit));
+  }
+  if (params?.offset !== undefined) {
+    fullUrl.searchParams.append("offset", String(params.offset));
+  }
+  console.log("Constructed URL for fetchUsersWithBookInLibrary:", fullUrl.toString());
+
+  const response = await fetch(fullUrl.toString());
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({
+      message: `Failed to fetch users for book id ${bookId}`,
+    }));
+    throw new Error(
+      errorData.message || `HTTP error! status: ${response.status}`,
+    );
+  }
+  const data: PaginatedUsersResponse = await response.json();
+  console.log(
+    `Users with book ID ${bookId} from API (params ${JSON.stringify(params)}):`,
+    data,
+  );
+  return data;
 }
 
 // You can add more API functions here, for example:
