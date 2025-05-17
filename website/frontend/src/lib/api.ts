@@ -63,8 +63,9 @@ export async function fetchBooks(): Promise<BookFromTypes[]> {
   }
   
   const rawBooks: RawBookFromAPI[] = await response.json();
+  console.log("Raw books from API:", rawBooks); // Log raw books
   
-  return rawBooks.map((rawBook): BookFromTypes => {
+  const mappedBooks = rawBooks.map((rawBook): BookFromTypes => {
     return {
       id: rawBook.id,
       title: rawBook.title,
@@ -78,6 +79,8 @@ export async function fetchBooks(): Promise<BookFromTypes[]> {
       // genre and reviews are optional in BookFromTypes and not expected from this endpoint.
     };
   });
+  console.log("Mapped books for frontend:", mappedBooks); // Log mapped books
+  return mappedBooks;
 }
 
 // You can add more API functions here, for example:

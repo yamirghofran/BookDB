@@ -19,6 +19,11 @@ function App() {
     queryFn: fetchBooks,
   });
 
+  // Log allBooks when it's available
+  if (allBooks) {
+    console.log("Books data in App component (allBooks):", allBooks);
+  }
+
   const filteredBooks = useMemo(() => {
     if (!allBooks) return [];
     if (!searchQuery.trim()) return allBooks;
