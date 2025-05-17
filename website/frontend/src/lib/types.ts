@@ -6,6 +6,9 @@ export interface Book {
     description?: string
     genre?: string[]
     reviews?: Review[]
+    averageRating?: number // Added
+    ratingsCount?: number  // Added
+    reviewsTotalCount?: number // Added for pagination
   }
   
   export interface Author {

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
+import { Link } from "@tanstack/react-router"; // Import Link
 import { Search } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import type { Book } from "@/lib/types"
@@ -56,24 +57,27 @@ export default function SearchBar({ searchQuery, setSearchQuery, suggestions }: 
           className="absolute z-10 mt-1 w-full bg-background border rounded-md shadow-lg max-h-60 overflow-auto"
         >
           {suggestions.map((book) => (
-            <div
+            <Link
+              to={`/books/${book.id}` as any}
               key={book.id}
-              className="p-3 hover:bg-muted cursor-pointer flex items-center gap-3"
-              onClick={() => {
-                setSearchQuery(book.title)
-                setShowSuggestions(false)
-              }}
+              className="block hover:bg-muted" // Make Link block for full clickable area
+              onClick={() => setShowSuggestions(false)} // Close suggestions on click
             >
-              <img
-                src={book.coverUrl || "/placeholder.svg"}
-                alt={book.title}
-                className="h-12 w-9 object-cover rounded"
-              />
-              <div>
-                <p className="font-medium">{book.title}</p>
-                <p className="text-sm text-muted-foreground">{book.authors.join(", ")}</p>
+              <div
+                className="p-3 cursor-pointer flex items-center gap-3"
+                // Removed onClick from div as Link handles navigation
+              >
+                <img
+                  src={book.coverUrl || "/placeholder.svg"}
+                  alt={book.title}
+                  className="h-12 w-9 object-cover rounded"
+                />
+                <div>
+                  <p className="font-medium">{book.title}</p>
+                  <p className="text-sm text-muted-foreground">{book.authors.join(", ")}</p>
+                </div>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}

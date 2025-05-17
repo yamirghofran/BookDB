@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings" // Added for strings.Split
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -26,17 +28,73 @@ func NewHandler(db *db.Queries, qdrantClient *qdrant.Client) *Handler {
 	}
 }
 
+// BookResponse defines the structure for book data returned by the API, including authors.
+// JSON tags are capitalized to match the frontend's RawBookFromAPI interface.
+type ReviewResponse struct {
+	ID            pgtype.UUID        `json:"id"`
+	BookID        pgtype.UUID        `json:"bookId"`
+	UserID        pgtype.UUID        `json:"userId"`
+	UserName      string             `json:"userName"`
+	UserAvatarURL string             `json:"userAvatarUrl"` // Will be empty string for now
+	Rating        pgtype.Int2        `json:"rating"`        // Assuming rating is SMALLINT (Int2)
+	ReviewText    string             `json:"reviewText"`
+	CreatedAt     pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt     pgtype.Timestamptz `json:"updatedAt"`
+}
+
+type BookResponse struct {
+	ID                pgtype.UUID        `json:"ID"`
+	GoodreadsID       int64              `json:"GoodreadsID,omitempty"`
+	GoodreadsUrl      pgtype.Text        `json:"GoodreadsUrl,omitempty"`
+	Title             string             `json:"Title"`
+	Description       pgtype.Text        `json:"Description,omitempty"`
+	PublicationYear   pgtype.Int8        `json:"PublicationYear,omitempty"`
+	CoverImageUrl     pgtype.Text        `json:"CoverImageUrl,omitempty"`
+	AverageRating     *float64           `json:"AverageRating,omitempty"`
+	RatingsCount      pgtype.Int8        `json:"RatingsCount,omitempty"`
+	CreatedAt         pgtype.Timestamptz `json:"CreatedAt,omitempty"`
+	UpdatedAt         pgtype.Timestamptz `json:"UpdatedAt,omitempty"`
+	Authors           []string           `json:"Authors"`
+	Genres            []string           `json:"Genres,omitempty"`  // Added Genres field
+	Reviews           []ReviewResponse   `json:"Reviews,omitempty"` // Added Reviews field
+	ReviewsTotalCount *int64             `json:"ReviewsTotalCount,omitempty"`
+}
+
 // Full Text Search
 // SearchBooksByContent searches for books by content similarity
 func (h *Handler) SearchBooksByContent(c *gin.Context) {
-	query := c.Query("q")
-	if query == "" {
+	originalQuery := c.Query("q")
+	if originalQuery == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Search query is required"})
 		return
 	}
 
-	limit := 10
-	offset := 0
+	// Process the query for more effective full-text search with partial words
+	// For "ben horo", this aims to create a query like "ben:* & horo:*"
+	queryParts := strings.Fields(strings.ToLower(originalQuery)) // Split by whitespace and lowercase
+	processedQueryParts := make([]string, 0, len(queryParts))
+	for _, part := range queryParts {
+		// Sanitize part to remove characters that might conflict with tsquery syntax,
+		// though websearch_to_tsquery is generally robust.
+		// For simplicity, we'll just ensure it's not empty.
+		if part != "" {
+			processedQueryParts = append(processedQueryParts, part+":*") // Append prefix match operator
+		}
+	}
+
+	// If only one part, websearch_to_tsquery handles it well.
+	// If multiple parts, joining with ' & ' makes the AND explicit for prefix matches.
+	var effectiveQueryString string
+	if len(processedQueryParts) > 0 {
+		effectiveQueryString = strings.Join(processedQueryParts, " & ")
+	} else {
+		effectiveQueryString = originalQuery // Fallback to original if processing results in empty
+	}
+
+	fmt.Printf("Original query: '%s', Effective tsquery input: '%s'\n", originalQuery, effectiveQueryString)
+
+	limit := 10 // Default limit
+	offset := 0 // Default offset
 
 	if limitParam := c.Query("limit"); limitParam != "" {
 		parsedLimit, err := strconv.Atoi(limitParam)
@@ -47,26 +105,97 @@ func (h *Handler) SearchBooksByContent(c *gin.Context) {
 
 	if offsetParam := c.Query("offset"); offsetParam != "" {
 		parsedOffset, err := strconv.Atoi(offsetParam)
-		if err == nil && parsedOffset > 0 {
+		if err == nil && parsedOffset >= 0 { // offset can be 0
 			offset = parsedOffset
 		}
 	}
 
-	// Use the PostgreSQL full-text search
-	books, err := h.DB.SearchBooks(c, db.SearchBooksParams{
-		WebsearchToTsquery: query,
+	dbBooks, err := h.DB.SearchBooks(c, db.SearchBooksParams{
+		WebsearchToTsquery: effectiveQueryString, // Use the processed query string
 		Limit:              int32(limit),
 		Offset:             int32(offset),
 	})
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search books: " + err.Error()})
 		return
 	}
 
+	responseBooks := make([]BookResponse, 0, len(dbBooks))
+	for _, bookRow := range dbBooks {
+		var authors []string
+		if bookRow.Authors != nil {
+			switch v := bookRow.Authors.(type) {
+			case []string:
+				authors = v
+			case *[]string: // sqlc might return *[]string for text[] if nullable
+				if v != nil {
+					authors = *v
+				} else {
+					authors = []string{}
+				}
+			case []interface{}: // Fallback for some drivers/scenarios
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						authors = append(authors, str)
+					}
+				}
+			// REMOVED case pgtype.TextArray as it's not a defined type in this context
+			case []byte: // Handle case where text[] is scanned as []byte (e.g., "{author1,author2}")
+				// This is a simplified parser. For robust CSV or quoted array elements, a proper parser is needed.
+				temp := string(v)
+				if len(temp) > 2 && temp[0] == '{' && temp[len(temp)-1] == '}' {
+					temp = temp[1 : len(temp)-1] // Remove {}
+					if temp != "" {
+						authors = strings.Split(temp, ",") // Naive split
+					} else {
+						authors = []string{}
+					}
+				} else {
+					authors = []string{}
+				}
+			default:
+				fmt.Printf("Warning: SearchBooks Unexpected type for Authors field: %T, value: %#v\n", v, v)
+				authors = []string{}
+			}
+		} else {
+			authors = []string{}
+		}
+		if authors == nil {
+			authors = []string{}
+		}
+
+		var apiAvgRating *float64
+		if bookRow.AverageRating.Valid {
+			// Attempt to convert pgtype.Numeric to float64
+			float8Val, err := bookRow.AverageRating.Float64Value()
+			if err == nil && float8Val.Valid {
+				apiAvgRating = &float8Val.Float64
+			} else if err != nil {
+				fmt.Printf("Error converting AverageRating to float64 in SearchBooks: %v\n", err)
+				// apiAvgRating remains nil
+			}
+		}
+
+		responseBooks = append(responseBooks, BookResponse{
+			ID:              bookRow.ID,
+			GoodreadsID:     bookRow.GoodreadsID,
+			GoodreadsUrl:    bookRow.GoodreadsUrl,
+			Title:           bookRow.Title,
+			Description:     bookRow.Description,
+			PublicationYear: bookRow.PublicationYear,
+			CoverImageUrl:   bookRow.CoverImageUrl,
+			AverageRating:   apiAvgRating,
+			RatingsCount:    bookRow.RatingsCount,
+			CreatedAt:       bookRow.CreatedAt,
+			UpdatedAt:       bookRow.UpdatedAt,
+			Authors:         authors,
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"query":   query,
-		"results": books,
+		"query":   originalQuery, // Use originalQuery here
+		"results": responseBooks,
 	})
 }
 
@@ -74,35 +203,102 @@ func (h *Handler) SearchBooksByContent(c *gin.Context) {
 
 // ListBooks returns a list of books
 func (h *Handler) ListBooks(c *gin.Context) {
-	limit := 10
+	limit := 100 // Default limit, larger for a general listing
 	offset := 0
 
 	// Parse query parameters if provided
 	if limitParam := c.Query("limit"); limitParam != "" {
 		parsedLimit, err := strconv.Atoi(limitParam)
-		if err == nil {
+		if err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
 	}
 
 	if offsetParam := c.Query("offset"); offsetParam != "" {
 		parsedOffset, err := strconv.Atoi(offsetParam)
-		if err == nil {
+		if err == nil && parsedOffset >= 0 { // offset can be 0
 			offset = parsedOffset
 		}
 	}
 
-	books, err := h.DB.ListBooks(c, db.ListBooksParams{
+	dbBooks, err := h.DB.ListBooks(c, db.ListBooksParams{
 		Limit:  int32(limit),
 		Offset: int32(offset),
 	})
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list books: " + err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, books)
+	responseBooks := make([]BookResponse, 0, len(dbBooks))
+	for _, bookRow := range dbBooks {
+		var authors []string
+		if bookRow.Authors != nil {
+			switch v := bookRow.Authors.(type) {
+			case []string:
+				authors = v
+			case *[]string:
+				if v != nil {
+					authors = *v
+				} else {
+					authors = []string{}
+				}
+			case []interface{}:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						authors = append(authors, str)
+					}
+				}
+			// REMOVED case pgtype.TextArray as it's not a defined type in this context
+			case []byte:
+				temp := string(v)
+				if len(temp) > 2 && temp[0] == '{' && temp[len(temp)-1] == '}' {
+					temp = temp[1 : len(temp)-1]
+					if temp != "" {
+						authors = strings.Split(temp, ",")
+					} else {
+						authors = []string{}
+					}
+				} else {
+					authors = []string{}
+				}
+			default:
+				fmt.Printf("Warning: ListBooks Unexpected type for Authors field: %T, value: %#v\n", v, v)
+				authors = []string{}
+			}
+		} else {
+			authors = []string{}
+		}
+		if authors == nil {
+			authors = []string{}
+		}
+
+		var apiAvgRating *float64
+		if bookRow.AverageRating.Valid {
+			float8Val, err := bookRow.AverageRating.Float64Value()
+			if err == nil && float8Val.Valid {
+				apiAvgRating = &float8Val.Float64
+			} else if err != nil {
+				fmt.Printf("Error converting AverageRating to float64 in ListBooks: %v\n", err)
+			}
+		}
+		responseBooks = append(responseBooks, BookResponse{
+			ID:              bookRow.ID,
+			GoodreadsID:     bookRow.GoodreadsID,
+			GoodreadsUrl:    bookRow.GoodreadsUrl,
+			Title:           bookRow.Title,
+			Description:     bookRow.Description,
+			PublicationYear: bookRow.PublicationYear,
+			CoverImageUrl:   bookRow.CoverImageUrl,
+			AverageRating:   apiAvgRating,
+			RatingsCount:    bookRow.RatingsCount,
+			CreatedAt:       bookRow.CreatedAt,
+			UpdatedAt:       bookRow.UpdatedAt,
+			Authors:         authors,
+		})
+	}
+	c.JSON(http.StatusOK, responseBooks)
 }
 
 // GetBook returns a specific book by ID
@@ -122,13 +318,139 @@ func (h *Handler) GetBook(c *gin.Context) {
 		Valid: true,
 	}
 
-	book, err := h.DB.GetBookByID(c, pgUUID)
+	bookRow, err := h.DB.GetBookByID(c, pgUUID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Book not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, book)
+	// Process Authors
+	var authors []string
+	if bookRow.Authors != nil {
+		switch v := bookRow.Authors.(type) {
+		case []string:
+			authors = v
+		case *[]string:
+			if v != nil {
+				authors = *v
+			} else {
+				authors = []string{}
+			}
+		case []interface{}:
+			for _, item := range v {
+				if str, ok := item.(string); ok {
+					authors = append(authors, str)
+				}
+			}
+		case []byte:
+			temp := string(v)
+			if len(temp) > 2 && temp[0] == '{' && temp[len(temp)-1] == '}' {
+				temp = temp[1 : len(temp)-1]
+				if temp != "" {
+					authors = strings.Split(temp, ",")
+				} else {
+					authors = []string{}
+				}
+			} else {
+				authors = []string{}
+			}
+		default:
+			fmt.Printf("Warning: GetBook Unexpected type for Authors field: %T, value: %#v\n", v, v)
+			authors = []string{}
+		}
+	} else {
+		authors = []string{}
+	}
+	if authors == nil {
+		authors = []string{}
+	}
+
+	// Process AverageRating
+	var apiAvgRating *float64
+	if bookRow.AverageRating.Valid {
+		float8Val, err := bookRow.AverageRating.Float64Value()
+		if err == nil && float8Val.Valid {
+			apiAvgRating = &float8Val.Float64
+		} else if err != nil {
+			fmt.Printf("Error converting AverageRating to float64 in GetBook: %v\n", err)
+		}
+	}
+
+	// Fetch reviews for the book with pagination
+	reviewsLimit := 10 // Default limit for reviews
+	reviewsOffset := 0 // Default offset for reviews
+
+	if limitParam := c.Query("reviewsLimit"); limitParam != "" {
+		parsedLimit, err := strconv.Atoi(limitParam)
+		if err == nil && parsedLimit > 0 {
+			reviewsLimit = parsedLimit
+		}
+	}
+
+	if offsetParam := c.Query("reviewsOffset"); offsetParam != "" {
+		parsedOffset, err := strconv.Atoi(offsetParam)
+		if err == nil && parsedOffset >= 0 {
+			reviewsOffset = parsedOffset
+		}
+	}
+
+	dbReviews, err := h.DB.GetReviewsByBookID(c, db.GetReviewsByBookIDParams{
+		BookID: bookRow.ID, // bookRow.ID is pgtype.UUID
+		Limit:  int32(reviewsLimit),
+		Offset: int32(reviewsOffset),
+	})
+	if err != nil {
+		// Log the error but don't fail the whole request, just return book without reviews
+		fmt.Printf("Warning: Failed to fetch reviews for book ID %v: %v\n", bookRow.ID, err)
+		// dbReviews will be nil or empty, so apiReviews will be empty
+	}
+
+	apiReviews := make([]ReviewResponse, 0, len(dbReviews))
+	var totalReviewsCount int64
+	if len(dbReviews) > 0 {
+		// TotalReviews is expected to be on each row from the SQL query
+		// We take it from the first row.
+		// This assumes sqlc will generate TotalReviews field in GetReviewsByBookIDRow
+		totalReviewsCount = dbReviews[0].TotalReviews
+	}
+
+	for _, dbReview := range dbReviews {
+		apiReviews = append(apiReviews, ReviewResponse{
+			ID:            dbReview.ID,
+			BookID:        dbReview.BookID,
+			UserID:        dbReview.UserID,
+			UserName:      dbReview.UserName,
+			UserAvatarURL: "", // No avatar URL from DB currently
+			Rating:        dbReview.Rating,
+			ReviewText:    dbReview.ReviewText,
+			CreatedAt:     dbReview.CreatedAt,
+			UpdatedAt:     dbReview.UpdatedAt,
+		})
+	}
+
+	response := BookResponse{
+		ID:              bookRow.ID,
+		GoodreadsID:     bookRow.GoodreadsID,
+		GoodreadsUrl:    bookRow.GoodreadsUrl,
+		Title:           bookRow.Title,
+		Description:     bookRow.Description,
+		PublicationYear: bookRow.PublicationYear,
+		CoverImageUrl:   bookRow.CoverImageUrl,
+		AverageRating:   apiAvgRating,
+		RatingsCount:    bookRow.RatingsCount,
+		CreatedAt:       bookRow.CreatedAt,
+		UpdatedAt:       bookRow.UpdatedAt,
+		Authors:         authors,
+		// Process Genres (similar to Authors)
+		Genres:            processStringArrayInterface(bookRow.Genres),
+		Reviews:           apiReviews, // Add reviews to response
+		ReviewsTotalCount: &totalReviewsCount,
+	}
+	if len(dbReviews) == 0 { // If there are no reviews, don't send the count
+		response.ReviewsTotalCount = nil
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // CreateBook creates a new book
@@ -702,4 +1024,58 @@ func (h *Handler) GetRecommendationsForUser(c *gin.Context) {
 
 	// Delegate to the collaborative recommendations handler
 	rs.GetCollaborativeRecommendations(c)
+}
+
+// processStringArrayInterface is a helper function to convert interface{} (expected to be text[] from DB) to []string
+func processStringArrayInterface(dbField interface{}) []string {
+	var result []string
+	if dbField == nil {
+		return []string{}
+	}
+
+	switch v := dbField.(type) {
+	case []string:
+		result = v
+	case *[]string:
+		if v != nil {
+			result = *v
+		} else {
+			result = []string{}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+	case []byte: // Handle case where text[] is scanned as []byte (e.g., "{item1,item2}")
+		temp := string(v)
+		if len(temp) > 2 && temp[0] == '{' && temp[len(temp)-1] == '}' {
+			temp = temp[1 : len(temp)-1] // Remove {}
+			if temp != "" {
+				// This is a simplified parser. For robust CSV or quoted array elements, a proper parser is needed.
+				// It should handle quoted elements like {"genre one","genre two"}
+				// For now, a simple split by comma.
+				// Consider using a library or more robust parsing if genres can contain commas.
+				parts := strings.Split(temp, ",")
+				for _, p := range parts {
+					// Trim quotes if present (e.g. from `"{""Action"",""Adventure""}"`)
+					trimmedPart := strings.Trim(p, "\"")
+					result = append(result, trimmedPart)
+				}
+
+			} else {
+				result = []string{}
+			}
+		} else {
+			result = []string{}
+		}
+	default:
+		fmt.Printf("Warning: Unexpected type for string array field: %T, value: %#v\n", v, v)
+		result = []string{}
+	}
+	if result == nil { // Ensure it's never nil, always at least an empty slice
+		return []string{}
+	}
+	return result
 }

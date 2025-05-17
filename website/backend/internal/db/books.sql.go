@@ -115,9 +115,20 @@ func (q *Queries) GetBookByGoodreadsID(ctx context.Context, goodreadsID int64) (
 
 const getBookByID = `-- name: GetBookByID :one
 
-SELECT id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count, search_vector::text AS search_vector, created_at, updated_at
-FROM Books
-WHERE id = $1 LIMIT 1
+SELECT
+    b.id, b.goodreads_id, b.goodreads_url, b.title, b.description, b.publication_year,
+    b.cover_image_url, b.average_rating, b.ratings_count,
+    b.search_vector::text AS search_vector, b.created_at, b.updated_at,
+    COALESCE(ARRAY_AGG(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL), '{}') AS authors,
+    COALESCE(ARRAY_AGG(DISTINCT g.name ORDER BY g.name) FILTER (WHERE g.name IS NOT NULL), '{}') AS genres
+FROM Books b
+LEFT JOIN BookAuthors ba ON b.id = ba.book_id
+LEFT JOIN Authors a ON ba.author_id = a.id
+LEFT JOIN BookGenres bg ON b.id = bg.book_id
+LEFT JOIN Genres g ON bg.genre_id = g.id
+WHERE b.id = $1
+GROUP BY b.id -- Assuming b.id is PK
+LIMIT 1
 `
 
 type GetBookByIDRow struct {
@@ -133,6 +144,8 @@ type GetBookByIDRow struct {
 	SearchVector    string
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+	Authors         interface{}
+	Genres          interface{}
 }
 
 // Return all columns after creation
@@ -152,6 +165,8 @@ func (q *Queries) GetBookByID(ctx context.Context, id pgtype.UUID) (GetBookByIDR
 		&i.SearchVector,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Authors,
+		&i.Genres,
 	)
 	return i, err
 }
@@ -269,9 +284,48 @@ func (q *Queries) GetBooksByGenre(ctx context.Context, genreID int32) ([]GetBook
 }
 
 const listBooks = `-- name: ListBooks :many
-SELECT id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count, search_vector::text AS search_vector, created_at, updated_at
-FROM Books
-ORDER BY title
+WITH RankedBooks AS (
+    SELECT
+        b.id,
+        b.goodreads_id,
+        b.goodreads_url,
+        b.title,
+        b.description,
+        b.publication_year,
+        b.cover_image_url,
+        b.average_rating,
+        b.ratings_count,
+        b.search_vector::text AS search_vector,
+        b.created_at,
+        b.updated_at,
+        ROW_NUMBER() OVER(PARTITION BY b.title ORDER BY b.average_rating DESC NULLS LAST, b.ratings_count DESC NULLS LAST, b.id DESC) as rn
+    FROM Books b
+),
+UniqueRankedBooks AS (
+    SELECT id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count, search_vector, created_at, updated_at, rn FROM RankedBooks WHERE rn = 1
+)
+SELECT
+    urb.id,
+    urb.goodreads_id,
+    urb.goodreads_url,
+    urb.title,
+    urb.description,
+    urb.publication_year,
+    urb.cover_image_url,
+    urb.average_rating,
+    urb.ratings_count,
+    urb.search_vector,
+    urb.created_at,
+    urb.updated_at,
+    COALESCE(ARRAY_AGG(DISTINCT aut.name ORDER BY aut.name) FILTER (WHERE aut.name IS NOT NULL), '{}') AS authors
+FROM UniqueRankedBooks urb
+LEFT JOIN BookAuthors ba ON urb.id = ba.book_id
+LEFT JOIN Authors aut ON ba.author_id = aut.id
+GROUP BY
+    urb.id, urb.goodreads_id, urb.goodreads_url, urb.title, urb.description, urb.publication_year,
+    urb.cover_image_url, urb.average_rating, urb.ratings_count, urb.search_vector,
+    urb.created_at, urb.updated_at -- Ensure all selected non-aggregated columns from urb are in GROUP BY
+ORDER BY urb.average_rating DESC NULLS LAST, urb.ratings_count DESC NULLS LAST, urb.title
 LIMIT $1 OFFSET $2
 `
 
@@ -293,6 +347,7 @@ type ListBooksRow struct {
 	SearchVector    string
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+	Authors         interface{}
 }
 
 func (q *Queries) ListBooks(ctx context.Context, arg ListBooksParams) ([]ListBooksRow, error) {
@@ -317,6 +372,7 @@ func (q *Queries) ListBooks(ctx context.Context, arg ListBooksParams) ([]ListBoo
 			&i.SearchVector,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Authors,
 		); err != nil {
 			return nil, err
 		}
@@ -329,10 +385,17 @@ func (q *Queries) ListBooks(ctx context.Context, arg ListBooksParams) ([]ListBoo
 }
 
 const searchBooks = `-- name: SearchBooks :many
-SELECT id, goodreads_id, goodreads_url, title, description, publication_year, cover_image_url, average_rating, ratings_count, search_vector::text AS search_vector, created_at, updated_at
-FROM Books
-WHERE search_vector @@ websearch_to_tsquery('english', $1)
-ORDER BY ts_rank(search_vector, websearch_to_tsquery('english', $1)) DESC
+SELECT
+    b.id, b.goodreads_id, b.goodreads_url, b.title, b.description, b.publication_year,
+    b.cover_image_url, b.average_rating, b.ratings_count,
+    b.search_vector::text AS search_vector, b.created_at, b.updated_at,
+    COALESCE(ARRAY_AGG(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL), '{}') AS authors
+FROM Books b
+LEFT JOIN BookAuthors ba ON b.id = ba.book_id
+LEFT JOIN Authors a ON ba.author_id = a.id
+WHERE b.search_vector @@ websearch_to_tsquery('english', $1)
+GROUP BY b.id -- Assuming b.id is PK
+ORDER BY ts_rank(b.search_vector, websearch_to_tsquery('english', $1)) DESC
 LIMIT $2 OFFSET $3
 `
 
@@ -355,6 +418,7 @@ type SearchBooksRow struct {
 	SearchVector    string
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
+	Authors         interface{}
 }
 
 func (q *Queries) SearchBooks(ctx context.Context, arg SearchBooksParams) ([]SearchBooksRow, error) {
@@ -379,6 +443,7 @@ func (q *Queries) SearchBooks(ctx context.Context, arg SearchBooksParams) ([]Sea
 			&i.SearchVector,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Authors,
 		); err != nil {
 			return nil, err
 		}
