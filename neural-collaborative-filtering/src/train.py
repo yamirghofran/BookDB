@@ -3,40 +3,9 @@ import numpy as np
 from gmf import GMFEngine
 from mlp import MLPEngine
 from neumf import NeuMFEngine
-from data import SampleGenerator
 import os
-import glob
+from utils import get_best_checkpoint
 
-import re
-
-def get_best_checkpoint(model_prefix):
-    """Return the checkpoint file path with the best HR (and NDCG as tiebreaker) for a given model prefix."""
-    checkpoint_dir = 'checkpoints'
-    pattern = os.path.join(checkpoint_dir, f"{model_prefix}*_Epoch*_HR*_NDCG*.model")
-    checkpoint_files = glob.glob(pattern)
-    if not checkpoint_files:
-        raise FileNotFoundError(f"No checkpoint files found for pattern: {pattern}")
-
-    best_file = None
-    best_hr = -1
-    best_ndcg = -1
-
-    # Regex to extract HR and NDCG from filename
-    regex = re.compile(r'_HR([0-9.]+)_NDCG([0-9.]+)\.model')
-
-    for file in checkpoint_files:
-        match = regex.search(file)
-        if match:
-            hr = float(match.group(1))
-            ndcg = float(match.group(2))
-            if (hr > best_hr) or (hr == best_hr and ndcg > best_ndcg):
-                best_hr = hr
-                best_ndcg = ndcg
-                best_file = file
-
-    if best_file is None:
-        raise ValueError("No valid checkpoint files found with HR and NDCG in the filename.")
-    return best_file
 
 gmf_config = {'alias': 'gmf_factor32neg4-implict',
               'num_epoch': 20,
@@ -155,7 +124,7 @@ def run_ncf_pipeline(book_interactions, output_dir='../res'):
         neumf_metrics_history.append({'epoch': epoch, 'hit_ratio': hit_ratio, 'ndcg': ndcg})
     pd.DataFrame(neumf_metrics_history).to_csv(f'{output_dir}/neumf_metrics_history.csv', index=False)
 
-book_interactions_dir = 'data/books/interactions.parquet'
+book_interactions_dir = 'data/interactions_prepared_ncf_reduced.parquet'
 book_interactions = pd.read_parquet(book_interactions_dir)
 print('Range of userId is [{}, {}]'.format(book_interactions.userId.min(), book_interactions.userId.max()))
 print('Range of itemId is [{}, {}]'.format(book_interactions.itemId.min(), book_interactions.itemId.max()))
