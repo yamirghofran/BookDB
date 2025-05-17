@@ -204,5 +204,3 @@ print(f"Uploaded {len(sbert_points_to_upload)} SBERT book points.")
 print("-" * 30)
 
 print("All uploads complete.")
-
-
