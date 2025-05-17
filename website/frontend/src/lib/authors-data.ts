@@ -1,0 +1,88 @@
+import type { Author } from "./types"
+
+export const authors: Author[] = [
+  {
+    id: "1",
+    name: "Matt Haig",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1975,
+    bio: "Matt Haig is a British author for children and adults. His memoir Reasons to Stay Alive was a number one bestseller, staying in the British top ten for 46 weeks. His children's book A Boy Called Christmas was a runaway hit and is translated in over 40 languages.",
+  },
+  {
+    id: "2",
+    name: "James Clear",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1986,
+    bio: "James Clear is an American author, entrepreneur, and photographer. He is known for his book Atomic Habits, which has sold more than 5 million copies worldwide. Clear is a regular speaker at Fortune 500 companies and his work has been featured in publications such as Time magazine, the New York Times, and the Wall Street Journal.",
+  },
+  {
+    id: "3",
+    name: "Tara Westover",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1986,
+    bio: "Tara Westover is an American memoirist, essayist and historian. Her memoir Educated (2018) debuted at #1 on The New York Times bestseller list and was a finalist for a number of national awards, including the LA Times Book Prize, PEN America's Jean Stein Book Award, and two awards from the National Book Critics Circle Award.",
+  },
+  {
+    id: "4",
+    name: "Alex Michaelides",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1977,
+    bio: "Alex Michaelides is a bestselling British-Cypriot author and screenwriter. His debut novel, the psychological thriller The Silent Patient, is a New York Times and Sunday Times bestseller, with over a million copies sold.",
+  },
+  {
+    id: "5",
+    name: "Delia Owens",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1949,
+    bio: "Delia Owens is an American author and zoologist. Her debut novel Where the Crawdads Sing topped The New York Times Fiction Best Sellers of 2019 and The New York Times Fiction Best Sellers of 2020 for several weeks. Prior to this novel, Owens had co-authored three books about her life as a wildlife scientist in Africa.",
+  },
+  {
+    id: "6",
+    name: "Michelle Obama",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1964,
+    bio: "Michelle Obama is an American attorney and author who served as the First Lady of the United States from 2009 to 2017. She is the wife of former President Barack Obama. She is the author of the memoir Becoming, which was released in November 2018 and sold more copies than any other book published in the United States in 2018.",
+  },
+  {
+    id: "7",
+    name: "Paulo Coelho",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1947,
+    bio: "Paulo Coelho is a Brazilian lyricist and novelist, best known for his novel The Alchemist. In 2014, he uploaded his personal papers online to create a virtual Paulo Coelho Foundation. He is the writer with the highest number of social media followers.",
+  },
+  {
+    id: "8",
+    name: "Yuval Noah Harari",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1976,
+    bio: "Yuval Noah Harari is an Israeli public intellectual, historian and professor in the Department of History at the Hebrew University of Jerusalem. He is the author of the popular science bestsellers Sapiens: A Brief History of Humankind, Homo Deus: A Brief History of Tomorrow, and 21 Lessons for the 21st Century.",
+  },
+  {
+    id: "9",
+    name: "Kristin Hannah",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1960,
+    bio: "Kristin Hannah is an American writer. Her most notable works include Winter Garden, The Nightingale, Firefly Lane, The Great Alone, and The Four Winds. The Nightingale was adapted as a film of the same name, directed by Mélanie Laurent.",
+  },
+  {
+    id: "10",
+    name: "Andy Weir",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1972,
+    bio: "Andy Weir is an American novelist whose debut novel, The Martian, was later adapted into a film of the same name directed by Ridley Scott. He also worked as a computer programmer for much of his life. He received the John W. Campbell Award for Best New Writer in 2016.",
+  },
+  {
+    id: "11",
+    name: "V.E. Schwab",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1987,
+    bio: "Victoria Elizabeth Schwab is an American fantasy author best known for her 2013 novel Vicious, the Shades of Magic series, and The Invisible Life of Addie LaRue. She publishes adult fiction under the name V. E. Schwab and young adult fiction under Victoria Schwab.",
+  },
+  {
+    id: "12",
+    name: "Kazuo Ishiguro",
+    imageUrl: "/placeholder.svg?height=300&width=300",
+    birthYear: 1954,
+    bio: "Kazuo Ishiguro is a British novelist, screenwriter, musician, and short-story writer. He was born in Nagasaki, Japan, and moved to Britain in 1960 when he was five. Ishiguro is one of the most celebrated contemporary fiction authors in English. He has received four Man Booker Prize nominations and won the award in 1989 for his novel The Remains of the Day.",
+  },
+]

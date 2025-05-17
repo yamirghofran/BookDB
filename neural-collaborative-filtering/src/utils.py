@@ -1,8 +1,7 @@
-"""
-    Some handy functions for pytroch model training ...
-"""
 import os
 import torch
+import glob
+import re
 
 
 # Checkpoints
@@ -17,6 +16,35 @@ def resume_checkpoint(model, model_dir, device):
     state_dict = torch.load(model_dir, map_location=device)
     model.load_state_dict(state_dict)
     print(f"Loaded model from {model_dir} to {device}")
+
+def get_best_checkpoint(model_prefix):
+    """Return the checkpoint file path with the best HR (and NDCG as tiebreaker) for a given model prefix."""
+    checkpoint_dir = 'checkpoints'
+    pattern = os.path.join(checkpoint_dir, f"{model_prefix}*_Epoch*_HR*_NDCG*.model")
+    checkpoint_files = glob.glob(pattern)
+    if not checkpoint_files:
+        raise FileNotFoundError(f"No checkpoint files found for pattern: {pattern}")
+
+    best_file = None
+    best_hr = -1
+    best_ndcg = -1
+
+    # Regex to extract HR and NDCG from filename
+    regex = re.compile(r'_HR([0-9.]+)_NDCG([0-9.]+)\.model')
+
+    for file in checkpoint_files:
+        match = regex.search(file)
+        if match:
+            hr = float(match.group(1))
+            ndcg = float(match.group(2))
+            if (hr > best_hr) or (hr == best_hr and ndcg > best_ndcg):
+                best_hr = hr
+                best_ndcg = ndcg
+                best_file = file
+
+    if best_file is None:
+        raise ValueError("No valid checkpoint files found with HR and NDCG in the filename.")
+    return best_file
 
 
 # Hyper params

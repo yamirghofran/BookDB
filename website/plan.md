@@ -1,0 +1,3 @@
+- [ ] Full-text search for books
+- [ ] Go & Qdrant query to generate recommendations for user: content-based + collaborative
+- [ ] UI
