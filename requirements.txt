@@ -16,3 +16,4 @@ PyYAML
 python-dotenv
 psycopg2-binary
 pytz
+names
