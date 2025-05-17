@@ -24,7 +24,7 @@ func NewServer(db *db.Queries, qdrantClient *qdrant.Client) *Server {
 	server := &Server{
 		DB:           db,
 		QdrantClient: qdrantClient,
-		Handlers:     handlers.NewHandler(db),
+		Handlers:     handlers.NewHandler(db, qdrantClient),
 	}
 
 	server.setupRouter()
@@ -88,7 +88,6 @@ func (s *Server) setupRouter() {
 		{
 			recommendations.GET("/books/:id/similar", s.Handlers.GetSimilarBooks)
 			recommendations.GET("/users/:id", s.Handlers.GetRecommendationsForUser)
-			recommendations.GET("/trending", s.Handlers.GetTrendingBooks)
 		}
 
 		// Auth endpoints

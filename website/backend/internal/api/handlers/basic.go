@@ -8,18 +8,21 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/qdrant/go-client/qdrant"
 	"github.com/yamirghofran/BookDB/internal/db"
 )
 
 // Handler holds dependencies for handlers
 type Handler struct {
-	DB *db.Queries
+	DB           *db.Queries
+	QdrantClient *qdrant.Client
 }
 
 // NewHandler creates a new handler instance
-func NewHandler(db *db.Queries) *Handler {
+func NewHandler(db *db.Queries, qdrantClient *qdrant.Client) *Handler {
 	return &Handler{
-		DB: db,
+		DB:           db,
+		QdrantClient: qdrantClient,
 	}
 }
 
@@ -677,4 +680,26 @@ func (h *Handler) GetBooksByAuthor(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, books)
+}
+
+// GetSimilarBooks returns similar books based on content-based filtering
+func (h *Handler) GetSimilarBooks(c *gin.Context) {
+	// Create a new recommendation service
+	rs := &RecommendationService{
+		QdrantClient: *h.QdrantClient,
+	}
+
+	// Delegate to the content-based recommendations handler
+	rs.GetContentBasedRecommendations(c)
+}
+
+// GetRecommendationsForUser returns book recommendations for a specific user
+func (h *Handler) GetRecommendationsForUser(c *gin.Context) {
+	// Create a new recommendation service
+	rs := &RecommendationService{
+		QdrantClient: *h.QdrantClient,
+	}
+
+	// Delegate to the collaborative recommendations handler
+	rs.GetCollaborativeRecommendations(c)
 }
