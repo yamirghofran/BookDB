@@ -8,9 +8,8 @@ services:
     depends_on:
       - backend
     networks:
-      - frontend-network
       - cloudflared
-      - backend-network # Added access to backend network
+      - backend-network # Only connected to backend network and cloudflared
     # For Nginx proxy manager access:
     environment:
       - BACKEND_SERVICE=backend
@@ -31,6 +30,7 @@ services:
       - DB_NAME=${POSTGRES_DB:-bookdb}
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+      - QDRANT_HTTP_VERSION=1.1 # Force HTTP/1.1 compatibility
       - APP_ENV=${APP_ENV:-production}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PORT=${PORT:-8080}
@@ -70,19 +70,27 @@ services:
   # Qdrant vector database
   qdrant:
     image: qdrant/qdrant:latest
+    ports:
+      - "127.0.0.1:6333:6333" # REST API - limited to localhost access for production
+      - "127.0.0.1:6334:6334" # gRPC API - limited to localhost access for production
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__ENABLE_TLS=false
     restart: unless-stopped
     networks:
       - backend-network
-    # Set healthcheck for service dependency management
+      - cloudflared # Added to allow frontend to connect directly if needed
     healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:6333/healthz" ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      test: [ "CMD", "curl", "--http1.1", "-f", "-H", "Accept: application/json", "-H", "User-Agent: Docker-Healthcheck/1.0", "http://localhost:6333/healthz" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    # Qdrant population service
 
 volumes:
   postgres_data:
@@ -93,8 +101,6 @@ volumes:
 networks:
   cloudflared:
     external: true
-  frontend-network:
-    driver: bridge
   backend-network:
     driver: bridge
-    internal: true # Only containers attached to this network can communicate
+    internal: false # Changed to allow frontend to connect to backend services

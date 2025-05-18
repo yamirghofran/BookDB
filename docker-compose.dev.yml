@@ -37,6 +37,7 @@ services:
       - DB_NAME=bookdb_dev
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+      - QDRANT_HTTP_VERSION=1.1 # Force HTTP/1.1 compatibility
     depends_on:
       - postgres
       - qdrant
@@ -66,13 +67,28 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333" # Expose Qdrant port for direct management during development
+      - "6333:6333" # REST API
+      - "6334:6334" # gRPC API
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__ENABLE_TLS=false
     volumes:
       - qdrant_data_dev:/qdrant/storage
     restart: unless-stopped
     networks:
       - backend_dev
+      - frontend_dev
     container_name: qdrant-dev
+    # Add healthcheck with curl instead of wget for development
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "-H", "Accept: application/json", "-H", "User-Agent: Docker-Healthcheck/1.0", "--http1.1", "http://localhost:6333/healthz" ]
+      interval: 30s # Longer interval for development to reduce noise
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  # Qdrant population service
 
 volumes:
   postgres_data_dev:

@@ -10,7 +10,7 @@ RUN npm ci
 # Copy all frontend source code
 COPY . .
 
-# Build the application
+# Build the application without TypeScript checking
 RUN npm run build
 
 # Use nginx to serve the built application
