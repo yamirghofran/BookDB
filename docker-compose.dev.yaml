@@ -1,0 +1,34 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    # No exposed ports in dev - access through nginx
+    restart: unless-stopped
+    networks:
+      - bookdb_dev
+    # container_name for clear identification
+    container_name: qdrant-test
+
+  nginx:
+    build:
+      context: .
+      dockerfile: ./nginx/Dockerfile
+    ports:
+      - "8080:80" # Expose only Nginx port for local testing
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+    networks:
+      - bookdb_dev
+      - default
+    # Container name for service discovery
+    container_name: bookdb-nginx-test
+
+volumes:
+  qdrant_data:
+    driver: local
+
+networks:
+  bookdb_dev:
+    driver: bridge

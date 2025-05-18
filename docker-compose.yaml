@@ -1,0 +1,36 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    # No exposed ports - using container naming instead
+    restart: unless-stopped
+    networks:
+      - bookdb
+    # Internal name for service discovery
+    container_name: qdrant
+
+  nginx:
+    build:
+      context: .
+      dockerfile: ./nginx/Dockerfile
+    # No exposed ports - using container naming instead
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+    networks:
+      - cloudflared
+      - bookdb
+    # Container name for service discovery
+    container_name: bookdb-nginx
+
+volumes:
+  qdrant_data:
+    driver: local
+
+networks:
+  cloudflared:
+    external: true
+  bookdb:
+    driver: bridge
+    internal: true
