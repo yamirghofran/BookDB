@@ -1,0 +1,56 @@
+# Global configuration
+global:
+  base_data_path: "data"
+  log_level: "INFO"
+  
+# Database configuration
+database:
+  dbname: ${DB_NAME}
+  user: ${DB_USER}
+  password: ${DB_PASSWORD}
+  host: ${DB_HOST}
+  port: ${DB_PORT:5432}
+
+# Pipeline step configurations
+data_preprocessor:
+  input_path: "${global.base_data_path}/raw"
+  output_path: "${global.base_data_path}/preprocessed"
+  
+data_reducer:
+  input_path: "${global.base_data_path}/preprocessed"
+  output_path: "${global.base_data_path}/reduced"
+  reduction_factors:
+    books: 0.2
+    users: 0.1
+    
+uuid_processor:
+  input_path: "${global.base_data_path}/reduced"
+  output_path: "${global.base_data_path}/processed"
+  
+postgres_uploader:
+  db_config: ${database}
+  data_paths:
+    books: "${global.base_data_path}/reduced_books.parquet"
+    interactions: "${global.base_data_path}/reduced_interactions.parquet"
+    reviews: "${global.base_data_path}/reduced_reviews.parquet"
+    authors: "${global.base_data_path}/new_authors.parquet"
+    users: "${global.base_data_path}/user_id_map_reduced.csv"
+    item_id_map: "${global.base_data_path}/item_id_map_reduced.csv"
+    
+sbert_embedder:
+  model_name: "all-MiniLM-L6-v2"
+  input_path: "${global.base_data_path}/processed"
+  output_path: "${global.base_data_path}/embeddings"
+  
+qdrant_uploader:
+  qdrant_url: ${QDRANT_URL}
+  qdrant_api_key: ${QDRANT_API_KEY}
+  collection_name: "books"
+  embeddings_path: "${global.base_data_path}/embeddings"
+  
+ncf_processor:
+  enabled: ${RUN_NCF:false}
+  data_path: "${global.base_data_path}/processed"
+  model_path: "${global.base_data_path}/models"
+  epochs: 10
+  batch_size: 256

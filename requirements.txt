@@ -18,3 +18,8 @@ torchvision
 tensorboardX
 accelerate>=0.27.2
 python-dotenv
+
+python-dotenv
+psycopg2-binary
+pytz
+names
