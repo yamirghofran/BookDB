@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/joho/godotenv"
 
-	"github.com/qdrant/go-client/qdrant"
 	"github.com/yamirghofran/BookDB/internal/api"
 	"github.com/yamirghofran/BookDB/internal/db"
 )
@@ -76,10 +75,7 @@ func main() {
 	}
 	
 	log.Printf("Connecting to Qdrant at %s:%d", qdrantHost, qdrantPort)
-	qdrantClient, err := qdrant.NewClient(&qdrant.Config{
-		Host: qdrantHost,
-		Port: qdrantPort,
-	})
+	qdrantClient, err := createQdrantRestClient(qdrantHost, qdrantPort)
 	if err != nil {
 		log.Fatalf("FATAL: Error creating Qdrant client: %v", err)
 	}
