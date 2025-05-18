@@ -119,3 +119,19 @@ FROM Books b
 JOIN BookGenres bg ON b.id = bg.book_id
 WHERE bg.genre_id = $1
 ORDER BY b.title;
+
+-- name: GetBooksByGoodreadsIDs :many
+SELECT
+    b.id, b.goodreads_id, b.goodreads_url, b.title, b.description, b.publication_year,
+    b.cover_image_url, b.average_rating, b.ratings_count,
+    b.search_vector::text AS search_vector, b.created_at, b.updated_at,
+    COALESCE(ARRAY_AGG(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL), '{}') AS authors,
+    COALESCE(ARRAY_AGG(DISTINCT g.name ORDER BY g.name) FILTER (WHERE g.name IS NOT NULL), '{}') AS genres
+FROM Books b
+LEFT JOIN BookAuthors ba ON b.id = ba.book_id
+LEFT JOIN Authors a ON ba.author_id = a.id
+LEFT JOIN BookGenres bg ON b.id = bg.book_id
+LEFT JOIN Genres g ON bg.genre_id = g.id
+WHERE b.goodreads_id = ANY(sqlc.arg(goodreads_ids)::bigint[])
+GROUP BY b.id
+ORDER BY b.goodreads_id;

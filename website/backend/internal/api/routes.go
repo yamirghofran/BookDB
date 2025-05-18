@@ -88,6 +88,7 @@ func (s *Server) setupRouter() {
 		{
 			recommendations.GET("/books/:id/similar", s.Handlers.GetSimilarBooks)
 			recommendations.GET("/users/:id", s.Handlers.GetRecommendationsForUser)
+			recommendations.POST("/anonymous", s.Handlers.GetAnonymousRecommendations) // New route
 		}
 
 		// Auth endpoints

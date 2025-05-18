@@ -52,6 +52,9 @@ interface RawBookFromAPI {
   AverageRating?: number | null;
   RatingsCount?: number | null;
   // Include any other fields the backend /api/books actually returns
+  // For recommendations, the backend now returns the full BookResponse structure
+  Genres?: string[];
+  // Reviews and ReviewsTotalCount are not expected in lists like recommendations
 }
 
 interface FetchBooksParams {
@@ -88,6 +91,7 @@ export async function fetchBooks(params?: FetchBooksParams): Promise<BookFromTyp
       description: rawBook.Description === null || rawBook.Description === undefined
                    ? undefined
                    : String(rawBook.Description),
+      genre: Array.isArray(rawBook.Genres) ? rawBook.Genres : [], // Map genres if available
     };
   });
   console.log(`Mapped books for frontend (/books with params ${JSON.stringify(params)}):`, mappedBooks);
@@ -135,6 +139,7 @@ export async function searchBooksAPI(params: SearchBooksAPIParams): Promise<Book
       description: rawBook.Description === null || rawBook.Description === undefined
                    ? undefined
                    : String(rawBook.Description),
+      genre: Array.isArray(rawBook.Genres) ? rawBook.Genres : [], // Map genres if available
     };
   });
   console.log(`Mapped search results for frontend (query "${params.query}"):`, mappedBooks);
@@ -227,7 +232,7 @@ export async function fetchBookById(bookId: string, params?: FetchBookByIdParams
 }
 
 // RawSimilarBookFromAPI is an alias for RawBookFromAPI, so it now also expects Authors.
-type RawSimilarBookFromAPI = RawBookFromAPI;
+type RawSimilarBookFromAPI = RawBookFromAPI; // This should be fine as RawBookFromAPI now includes Genres
 
 export async function fetchSimilarBooks(bookId: string): Promise<BookFromTypes[]> {
   const response = await fetch(`${API_BASE_URL}/recommendations/books/${bookId}/similar`);
@@ -246,7 +251,7 @@ export async function fetchSimilarBooks(bookId: string): Promise<BookFromTypes[]
     description: rawBook.Description === null || rawBook.Description === undefined
                  ? undefined
                  : String(rawBook.Description),
-    genre: [], // Defaulting
+    genre: Array.isArray(rawBook.Genres) ? rawBook.Genres : [], // Map genres if available
   }));
 }
 
@@ -285,6 +290,40 @@ export async function fetchUsersWithBookInLibrary(
   );
   return data;
 }
+
+export async function fetchAnonymousRecommendations(likedBookIds: string[]): Promise<BookFromTypes[]> {
+  const response = await fetch(`${API_BASE_URL}/recommendations/anonymous`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ likedBookIds }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: 'Failed to fetch anonymous recommendations' }));
+    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+  }
+
+  const rawRecommendedBooks: RawBookFromAPI[] = await response.json(); // Backend returns full BookResponse
+  console.log(`Raw anonymous recommendations from API (likedBookIds: ${likedBookIds.join(', ')}):`, rawRecommendedBooks);
+
+  // The backend already returns BookResponse which is compatible with RawBookFromAPI here
+  // (assuming BookResponse includes ID, Title, Authors, CoverImageUrl, Description, Genres)
+  return rawRecommendedBooks.map((rawBook): BookFromTypes => ({
+    id: rawBook.ID,
+    title: rawBook.Title,
+    authors: Array.isArray(rawBook.Authors) ? rawBook.Authors : [],
+    coverUrl: rawBook.CoverImageUrl || "",
+    description: rawBook.Description === null || rawBook.Description === undefined
+                 ? undefined
+                 : String(rawBook.Description),
+    genre: Array.isArray(rawBook.Genres) ? rawBook.Genres : [],
+    // Other fields like averageRating, ratingsCount might be present if backend sends them
+    // and BookFromTypes includes them. For now, mapping the core fields.
+  }));
+}
+
 
 // You can add more API functions here, for example:
 // export async function fetchPersonById(id: string): Promise<Person> { ... }

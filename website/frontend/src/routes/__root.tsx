@@ -16,7 +16,6 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 		<UserLibraryProvider>
 			<>
 				<Navbar />
-
 				<Outlet />
 				<TanStackRouterDevtools />
 

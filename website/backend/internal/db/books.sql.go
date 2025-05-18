@@ -283,6 +283,75 @@ func (q *Queries) GetBooksByGenre(ctx context.Context, genreID int32) ([]GetBook
 	return items, nil
 }
 
+const getBooksByGoodreadsIDs = `-- name: GetBooksByGoodreadsIDs :many
+SELECT
+    b.id, b.goodreads_id, b.goodreads_url, b.title, b.description, b.publication_year,
+    b.cover_image_url, b.average_rating, b.ratings_count,
+    b.search_vector::text AS search_vector, b.created_at, b.updated_at,
+    COALESCE(ARRAY_AGG(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL), '{}') AS authors,
+    COALESCE(ARRAY_AGG(DISTINCT g.name ORDER BY g.name) FILTER (WHERE g.name IS NOT NULL), '{}') AS genres
+FROM Books b
+LEFT JOIN BookAuthors ba ON b.id = ba.book_id
+LEFT JOIN Authors a ON ba.author_id = a.id
+LEFT JOIN BookGenres bg ON b.id = bg.book_id
+LEFT JOIN Genres g ON bg.genre_id = g.id
+WHERE b.goodreads_id = ANY($1::bigint[])
+GROUP BY b.id
+ORDER BY b.goodreads_id
+`
+
+type GetBooksByGoodreadsIDsRow struct {
+	ID              pgtype.UUID
+	GoodreadsID     int64
+	GoodreadsUrl    pgtype.Text
+	Title           string
+	Description     pgtype.Text
+	PublicationYear pgtype.Int8
+	CoverImageUrl   pgtype.Text
+	AverageRating   pgtype.Numeric
+	RatingsCount    pgtype.Int8
+	SearchVector    string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	Authors         interface{}
+	Genres          interface{}
+}
+
+func (q *Queries) GetBooksByGoodreadsIDs(ctx context.Context, goodreadsIds []int64) ([]GetBooksByGoodreadsIDsRow, error) {
+	rows, err := q.db.Query(ctx, getBooksByGoodreadsIDs, goodreadsIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetBooksByGoodreadsIDsRow
+	for rows.Next() {
+		var i GetBooksByGoodreadsIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GoodreadsID,
+			&i.GoodreadsUrl,
+			&i.Title,
+			&i.Description,
+			&i.PublicationYear,
+			&i.CoverImageUrl,
+			&i.AverageRating,
+			&i.RatingsCount,
+			&i.SearchVector,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Authors,
+			&i.Genres,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listBooks = `-- name: ListBooks :many
 WITH RankedBooks AS (
     SELECT
