@@ -11,160 +11,63 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createReview = `-- name: CreateReview :one
-INSERT INTO Reviews (text, rating, book_id, user_id)
-VALUES ($1, $2, $3, $4)
-RETURNING id, text, rating, book_id, user_id, created_at, updated_at
-`
-
-type CreateReviewParams struct {
-	Text   string
-	Rating pgtype.Int2
-	BookID pgtype.UUID
-	UserID pgtype.UUID
-}
-
-func (q *Queries) CreateReview(ctx context.Context, arg CreateReviewParams) (Review, error) {
-	row := q.db.QueryRow(ctx, createReview,
-		arg.Text,
-		arg.Rating,
-		arg.BookID,
-		arg.UserID,
-	)
-	var i Review
-	err := row.Scan(
-		&i.ID,
-		&i.Text,
-		&i.Rating,
-		&i.BookID,
-		&i.UserID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const deleteReview = `-- name: DeleteReview :exec
-DELETE FROM Reviews
-WHERE id = $1 AND user_id = $2
-`
-
-type DeleteReviewParams struct {
-	ID     pgtype.UUID
-	UserID pgtype.UUID
-}
-
-func (q *Queries) DeleteReview(ctx context.Context, arg DeleteReviewParams) error {
-	_, err := q.db.Exec(ctx, deleteReview, arg.ID, arg.UserID)
-	return err
-}
-
-const getReviewByID = `-- name: GetReviewByID :one
-SELECT id, text, rating, book_id, user_id, created_at, updated_at
-FROM Reviews
-WHERE id = $1 LIMIT 1
-`
-
-func (q *Queries) GetReviewByID(ctx context.Context, id pgtype.UUID) (Review, error) {
-	row := q.db.QueryRow(ctx, getReviewByID, id)
-	var i Review
-	err := row.Scan(
-		&i.ID,
-		&i.Text,
-		&i.Rating,
-		&i.BookID,
-		&i.UserID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getReviewsByUser = `-- name: GetReviewsByUser :many
-SELECT r.id, r.text, r.rating, r.book_id, r.user_id, r.created_at, r.updated_at, b.title AS book_title -- Include book title for context
-FROM Reviews r
-JOIN Books b ON r.book_id = b.id
-WHERE r.user_id = $1
-ORDER BY r.created_at DESC
-`
-
-type GetReviewsByUserRow struct {
-	ID        pgtype.UUID
-	Text      string
-	Rating    pgtype.Int2
-	BookID    pgtype.UUID
-	UserID    pgtype.UUID
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
-	BookTitle string
-}
-
-func (q *Queries) GetReviewsByUser(ctx context.Context, userID pgtype.UUID) ([]GetReviewsByUserRow, error) {
-	rows, err := q.db.Query(ctx, getReviewsByUser, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetReviewsByUserRow
-	for rows.Next() {
-		var i GetReviewsByUserRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Text,
-			&i.Rating,
-			&i.BookID,
-			&i.UserID,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.BookTitle,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const getReviewsForBook = `-- name: GetReviewsForBook :many
-SELECT r.id, r.text, r.rating, r.book_id, r.user_id, r.created_at, r.updated_at, u.name AS user_name -- Include user name for context
+const getReviewsByBookID = `-- name: GetReviewsByBookID :many
+SELECT
+    r.id,
+    r.book_id,
+    r.user_id,
+    u.name AS user_name,
+    -- Removed u.avatar_url as it does not exist in the Users table
+    r.rating,
+    r.text AS review_text, -- Corrected column name to r.text
+    r.created_at,
+    r.updated_at,
+    COUNT(*) OVER() AS total_reviews -- Add total count for pagination
 FROM Reviews r
 JOIN Users u ON r.user_id = u.id
 WHERE r.book_id = $1
 ORDER BY r.created_at DESC
+LIMIT $2
+OFFSET $3
 `
 
-type GetReviewsForBookRow struct {
-	ID        pgtype.UUID
-	Text      string
-	Rating    pgtype.Int2
-	BookID    pgtype.UUID
-	UserID    pgtype.UUID
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
-	UserName  string
+type GetReviewsByBookIDParams struct {
+	BookID pgtype.UUID
+	Limit  int32
+	Offset int32
 }
 
-func (q *Queries) GetReviewsForBook(ctx context.Context, bookID pgtype.UUID) ([]GetReviewsForBookRow, error) {
-	rows, err := q.db.Query(ctx, getReviewsForBook, bookID)
+type GetReviewsByBookIDRow struct {
+	ID           pgtype.UUID
+	BookID       pgtype.UUID
+	UserID       pgtype.UUID
+	UserName     string
+	Rating       pgtype.Int2
+	ReviewText   string
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+	TotalReviews int64
+}
+
+func (q *Queries) GetReviewsByBookID(ctx context.Context, arg GetReviewsByBookIDParams) ([]GetReviewsByBookIDRow, error) {
+	rows, err := q.db.Query(ctx, getReviewsByBookID, arg.BookID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetReviewsForBookRow
+	var items []GetReviewsByBookIDRow
 	for rows.Next() {
-		var i GetReviewsForBookRow
+		var i GetReviewsByBookIDRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Text,
-			&i.Rating,
 			&i.BookID,
 			&i.UserID,
+			&i.UserName,
+			&i.Rating,
+			&i.ReviewText,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.UserName,
+			&i.TotalReviews,
 		); err != nil {
 			return nil, err
 		}
@@ -174,41 +77,4 @@ func (q *Queries) GetReviewsForBook(ctx context.Context, bookID pgtype.UUID) ([]
 		return nil, err
 	}
 	return items, nil
-}
-
-const updateReview = `-- name: UpdateReview :one
-UPDATE Reviews
-SET
-  text = COALESCE($1, text),
-  rating = $2, -- Allow setting rating to NULL
-  updated_at = CURRENT_TIMESTAMP
-WHERE id = $3 AND user_id = $4 -- Ensure user owns the review
-RETURNING id, text, rating, book_id, user_id, created_at, updated_at
-`
-
-type UpdateReviewParams struct {
-	Text   string
-	Rating pgtype.Int2
-	ID     pgtype.UUID
-	UserID pgtype.UUID
-}
-
-func (q *Queries) UpdateReview(ctx context.Context, arg UpdateReviewParams) (Review, error) {
-	row := q.db.QueryRow(ctx, updateReview,
-		arg.Text,
-		arg.Rating,
-		arg.ID,
-		arg.UserID,
-	)
-	var i Review
-	err := row.Scan(
-		&i.ID,
-		&i.Text,
-		&i.Rating,
-		&i.BookID,
-		&i.UserID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
 }

@@ -6,7 +6,7 @@ import (
 	"os"
 
 	// Keep if you need it for other things, but UUID point ID is used below
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool" // Changed from pgx to pgxpool
 	"github.com/joho/godotenv"
 
 	"github.com/qdrant/go-client/qdrant"
@@ -28,11 +28,11 @@ func main() {
 		log.Println(".env file loaded successfully.")
 	}
 
-	conn, err := pgx.Connect(context.Background(), os.Getenv("POSTGRESQL_URL"))
+	dbpool, err := pgxpool.New(context.Background(), os.Getenv("POSTGRESQL_URL"))
 	if err != nil {
-		log.Fatalf("FATAL: Error connecting to database: %v", err)
+		log.Fatalf("FATAL: Error connecting to database pool: %v", err)
 	}
-	defer conn.Close(context.Background())
+	defer dbpool.Close() // Close the pool when main exits
 
 	qdrantClient, err := qdrant.NewClient(&qdrant.Config{
 		Host: "localhost",
@@ -44,7 +44,8 @@ func main() {
 	defer qdrantClient.Close()
 
 	// Assuming db.New returns your sqlc generated queries struct
-	queries := db.New(conn)
+	// db.New from sqlc expects a DBTX, which can be *pgx.Conn or *pgxpool.Pool
+	queries := db.New(dbpool)
 
 	// Create and start the API server
 	port := os.Getenv("PORT")

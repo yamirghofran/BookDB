@@ -8,7 +8,7 @@ export default function Navbar() {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container flex h-16 items-center justify-between">
+      <div className="w-full flex h-16 items-center justify-between">
         {/* Logo */}
         <div className="mx-6">
           <Link to={'/' as any} className="flex items-center gap-2 font-bold text-xl">
@@ -34,14 +34,6 @@ export default function Navbar() {
             inactiveProps={{ className: "text-muted-foreground" }}
           >
             Library
-          </Link>
-          <Link
-            to={'/authors' as any}
-            className="text-sm font-medium transition-colors hover:text-primary"
-            activeProps={{ className: "text-primary font-semibold" }}
-            inactiveProps={{ className: "text-muted-foreground" }}
-          >
-            Authors
           </Link>
         </nav>
 

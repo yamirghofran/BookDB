@@ -1,13 +1,24 @@
-import { useState } from "react"
-import { Heart } from "lucide-react"
-import type { Book } from "@/lib/types"
+import { Heart } from "lucide-react";
+import type { Book } from "@/lib/types";
+import { useUserLibrary } from "@/contexts/UserLibraryContext";
 
 interface BookCardProps {
-  book: Book
+  book: Book;
 }
 
 export default function BookCard({ book }: BookCardProps) {
-  const [isLiked, setIsLiked] = useState(false)
+  const { isBookLiked, addBookToLibrary, removeBookFromLibrary } = useUserLibrary();
+  const liked = isBookLiked(book.id);
+
+  const handleLikeToggle = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (liked) {
+      removeBookFromLibrary(book.id);
+    } else {
+      addBookToLibrary(book.id);
+    }
+  };
 
   return (
     <div className="bg-card rounded-lg overflow-hidden border shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
@@ -21,22 +32,23 @@ export default function BookCard({ book }: BookCardProps) {
 
       <div className="p-4">
         <h3 className="font-semibold text-lg line-clamp-1">{book.title}</h3>
-        <p className="text-muted-foreground text-sm mb-3 line-clamp-1">{book.authors.join(", ")}</p>
+        <p className="text-muted-foreground text-sm mb-3 line-clamp-1">
+          {book.authors.join(", ")}
+        </p>
 
         <button
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            setIsLiked(!isLiked)
-          }}
+          onClick={handleLikeToggle}
           className="flex items-center gap-1 text-sm font-medium"
+          aria-pressed={liked}
         >
           <Heart
-            className={`h-5 w-5 transition-colors ${isLiked ? "fill-red-500 text-red-500" : "text-muted-foreground"}`}
+            className={`h-5 w-5 transition-colors ${
+              liked ? "fill-red-500 text-red-500" : "text-muted-foreground"
+            }`}
           />
-          <span>{isLiked ? "Liked" : "Like"}</span>
+          <span>{liked ? "Liked" : "Like"}</span>
         </button>
       </div>
     </div>
-  )
+  );
 }
