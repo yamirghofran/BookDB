@@ -1204,14 +1204,15 @@ type UserLibraryBookDetail struct {
 }
 
 type UserReviewWithBookInfo struct {
-	ReviewID        pgtype.UUID        `json:"reviewId"`
-	BookID          pgtype.UUID        `json:"bookId"`
-	BookTitle       string             `json:"bookTitle"`
-	UserID          pgtype.UUID        `json:"userId"`
-	Rating          pgtype.Int2        `json:"rating"`
-	ReviewText      string             `json:"reviewText"`
-	ReviewCreatedAt pgtype.Timestamptz `json:"reviewCreatedAt"`
-	ReviewUpdatedAt pgtype.Timestamptz `json:"reviewUpdatedAt"`
+	ReviewID          pgtype.UUID        `json:"reviewId"`
+	BookID            pgtype.UUID        `json:"bookId"`
+	BookTitle         string             `json:"bookTitle"`
+	BookCoverImageUrl pgtype.Text        `json:"bookCoverImageUrl,omitempty"` // Added
+	UserID            pgtype.UUID        `json:"userId"`
+	Rating            pgtype.Int2        `json:"rating"`
+	ReviewText        string             `json:"reviewText"`
+	ReviewCreatedAt   pgtype.Timestamptz `json:"reviewCreatedAt"`
+	ReviewUpdatedAt   pgtype.Timestamptz `json:"reviewUpdatedAt"`
 }
 
 type PersonDetailResponse struct {
@@ -1274,14 +1275,15 @@ func (h *Handler) GetPersonDetails(c *gin.Context) {
 	userReviews := make([]UserReviewWithBookInfo, 0, len(dbUserReviews))
 	for _, dbReview := range dbUserReviews {
 		userReviews = append(userReviews, UserReviewWithBookInfo{
-			ReviewID:        dbReview.ReviewID,
-			BookID:          dbReview.BookID,
-			BookTitle:       dbReview.BookTitle,
-			UserID:          dbReview.UserID,
-			Rating:          dbReview.Rating,
-			ReviewText:      dbReview.ReviewText,
-			ReviewCreatedAt: dbReview.ReviewCreatedAt,
-			ReviewUpdatedAt: dbReview.ReviewUpdatedAt,
+			ReviewID:          dbReview.ReviewID,
+			BookID:            dbReview.BookID,
+			BookTitle:         dbReview.BookTitle,
+			BookCoverImageUrl: dbReview.BookCoverImageUrl, // Added
+			UserID:            dbReview.UserID,
+			Rating:            dbReview.Rating,
+			ReviewText:        dbReview.ReviewText,
+			ReviewCreatedAt:   dbReview.ReviewCreatedAt,
+			ReviewUpdatedAt:   dbReview.ReviewUpdatedAt,
 		})
 	}
 

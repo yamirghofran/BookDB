@@ -332,6 +332,10 @@ interface RawUserReviewWithBookInfo { // Keep this internal to api.ts if only us
   reviewId: string;
   bookId: string;
   bookTitle: string;
+  bookCoverImageUrl?: { // Corrected to lowercase 'b' to match JSON tag
+    String: string;
+    Valid: boolean;
+  } | string | null;
   userId: string;
   rating: { Int16: number, Valid: boolean } | number | null;
   reviewText: string;
@@ -393,12 +397,22 @@ export async function fetchPersonDetails(userId: string): Promise<PersonDetails>
         createdAt = new Date(rawReview.reviewCreatedAt.Time).toISOString().split("T")[0];
       }
     }
+    let bookCoverUrl = "";
+    // Ensure rawReview.bookCoverImageUrl is accessed correctly (lowercase 'b')
+    if (rawReview.bookCoverImageUrl) {
+      if (typeof rawReview.bookCoverImageUrl === 'string') {
+        bookCoverUrl = rawReview.bookCoverImageUrl;
+      } else if (rawReview.bookCoverImageUrl.Valid) { // Check Valid for pgtype.Text like objects
+        bookCoverUrl = rawReview.bookCoverImageUrl.String;
+      }
+    }
 
     return {
       id: rawReview.reviewId,
-      userId: rawReview.userId, // Added missing userId
+      userId: rawReview.userId,
       bookId: rawReview.bookId,
-      bookTitle: rawReview.bookTitle, // Added bookTitle
+      bookTitle: rawReview.bookTitle,
+      bookCoverUrl: bookCoverUrl,
       // userName for ReviewCard should be the person whose page we are on.
       // The backend sends rawReview.userId, but ReviewCard expects userName.
       // We can use mappedUser.name here.
@@ -415,6 +429,45 @@ export async function fetchPersonDetails(userId: string): Promise<PersonDetails>
     libraryBooks: mappedLibraryBooks,
     userReviews: mappedUserReviews,
   };
+}
+
+export async function fetchSimilarUsers(userId: string): Promise<Person[]> {
+  const response = await fetch(`${API_BASE_URL}/recommendations/users/${userId}/similar`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: `Failed to fetch similar users for user ID ${userId}` }));
+    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+  }
+  const rawUsers: any[] = await response.json(); // Backend returns []db.User
+  console.log(`Raw similar users from API (for user ID: ${userId}):`, rawUsers);
+
+  // Map []db.User to frontend Person[]
+  return rawUsers.map((rawUser: any): Person => ({
+    id: rawUser.ID, // Assuming backend sends ID, Name, Email capitalized
+    name: rawUser.Name,
+    email: rawUser.Email,
+    // age is not part of db.User
+  }));
+}
+
+export async function fetchBookRecommendationsForUser(userId: string): Promise<BookFromTypes[]> {
+  const response = await fetch(`${API_BASE_URL}/recommendations/users/${userId}/books`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: `Failed to fetch book recommendations for user ID ${userId}` }));
+    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+  }
+  const rawBooks: RawBookFromAPI[] = await response.json(); // Backend returns []BookResponse
+  console.log(`Raw book recommendations for user from API (user ID: ${userId}):`, rawBooks);
+
+  return rawBooks.map((rawBook): BookFromTypes => ({
+    id: rawBook.ID,
+    title: rawBook.Title,
+    authors: Array.isArray(rawBook.Authors) ? rawBook.Authors : [],
+    coverUrl: rawBook.CoverImageUrl || "",
+    description: rawBook.Description === null || rawBook.Description === undefined
+                 ? undefined
+                 : String(rawBook.Description),
+    genre: Array.isArray(rawBook.Genres) ? rawBook.Genres : [],
+  }));
 }
 
 

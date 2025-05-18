@@ -110,6 +110,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (GetUserByIDR
 const getUserLibraryDetails = `-- name: GetUserLibraryDetails :many
 SELECT
     b.id,
+    b.goodreads_id, -- Added goodreads_id
     b.title,
     b.cover_image_url,
     COALESCE(ARRAY_AGG(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL), '{}') AS authors
@@ -124,6 +125,7 @@ ORDER BY ul.added_at DESC
 
 type GetUserLibraryDetailsRow struct {
 	ID            pgtype.UUID
+	GoodreadsID   int64
 	Title         string
 	CoverImageUrl pgtype.Text
 	Authors       interface{}
@@ -140,6 +142,7 @@ func (q *Queries) GetUserLibraryDetails(ctx context.Context, userID pgtype.UUID)
 		var i GetUserLibraryDetailsRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.GoodreadsID,
 			&i.Title,
 			&i.CoverImageUrl,
 			&i.Authors,
@@ -159,6 +162,7 @@ SELECT
     r.id AS review_id,
     r.book_id,
     b.title AS book_title,
+    b.cover_image_url AS book_cover_image_url, -- Added book cover
     r.user_id,
     r.rating,
     r.text AS review_text, -- Corrected column name from review_text to text
@@ -171,14 +175,15 @@ ORDER BY r.updated_at DESC
 `
 
 type GetUserReviewsWithBookInfoRow struct {
-	ReviewID        pgtype.UUID
-	BookID          pgtype.UUID
-	BookTitle       string
-	UserID          pgtype.UUID
-	Rating          pgtype.Int2
-	ReviewText      string
-	ReviewCreatedAt pgtype.Timestamptz
-	ReviewUpdatedAt pgtype.Timestamptz
+	ReviewID          pgtype.UUID
+	BookID            pgtype.UUID
+	BookTitle         string
+	BookCoverImageUrl pgtype.Text
+	UserID            pgtype.UUID
+	Rating            pgtype.Int2
+	ReviewText        string
+	ReviewCreatedAt   pgtype.Timestamptz
+	ReviewUpdatedAt   pgtype.Timestamptz
 }
 
 func (q *Queries) GetUserReviewsWithBookInfo(ctx context.Context, userID pgtype.UUID) ([]GetUserReviewsWithBookInfoRow, error) {
@@ -194,6 +199,7 @@ func (q *Queries) GetUserReviewsWithBookInfo(ctx context.Context, userID pgtype.
 			&i.ReviewID,
 			&i.BookID,
 			&i.BookTitle,
+			&i.BookCoverImageUrl,
 			&i.UserID,
 			&i.Rating,
 			&i.ReviewText,

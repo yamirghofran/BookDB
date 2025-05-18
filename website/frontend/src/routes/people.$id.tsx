@@ -1,11 +1,11 @@
 import { useEffect } from "react"; // Added useEffect
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, BookOpen, MessageSquare } from "lucide-react";
+import { ArrowLeft, BookOpen, MessageSquare, Users, ThumbsUp } from "lucide-react";
 import BookCarousel from "@/components/book-carousel";
-import ReviewCard from "@/components/review-card";
-import { fetchPersonDetails } from "@/lib/api";
-import type { PersonDetails, Book as BookFromTypes, Review } from "@/lib/types"; // Ensure Review is imported if not already via PersonDetails
+import PersonReviewCard from "@/components/PersonReviewCard"; // Changed to PersonReviewCard
+import { fetchPersonDetails, fetchSimilarUsers, fetchBookRecommendationsForUser } from "@/lib/api";
+import type { PersonDetails, Person, Book as BookFromTypes, Review } from "@/lib/types";
 
 export const Route = createFileRoute("/people/$id")({
   component: PersonDetailsPage,
@@ -22,6 +22,18 @@ function PersonDetailsPage() {
   } = useQuery<PersonDetails, Error>({
     queryKey: ["personDetails", userId],
     queryFn: () => fetchPersonDetails(userId),
+    enabled: !!userId,
+  });
+
+  const { data: similarUsers } = useQuery<Person[], Error>({
+    queryKey: ["similarUsers", userId],
+    queryFn: () => fetchSimilarUsers(userId),
+    enabled: !!userId,
+  });
+
+  const { data: recommendedBooksForUser } = useQuery<BookFromTypes[], Error>({
+    queryKey: ["bookRecommendationsForUser", userId],
+    queryFn: () => fetchBookRecommendationsForUser(userId),
     enabled: !!userId,
   });
 
@@ -115,24 +127,48 @@ function PersonDetailsPage() {
         </div>
       )}
 
+      {/* Recommended Books for User Section */}
+      {recommendedBooksForUser && recommendedBooksForUser.length > 0 && (
+        <div className="my-16">
+          <h2 className="text-2xl font-bold mb-6 flex items-center">
+            <ThumbsUp className="mr-3 h-6 w-6" />
+            Recommended Books for {user.name}
+          </h2>
+          <BookCarousel books={recommendedBooksForUser} />
+        </div>
+      )}
+
+      {/* Similar Users Section */}
+      {similarUsers && similarUsers.length > 0 && (
+        <div className="my-16">
+          <h2 className="text-2xl font-bold mb-6 flex items-center">
+            <Users className="mr-3 h-6 w-6" />
+            People with Similar Taste
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+            {similarUsers.map((simUser: Person) => (
+              <Link key={simUser.id} to="/people/$id" params={{ id: simUser.id }} className="block p-3 border rounded-lg hover:bg-muted/50 transition-colors text-center bg-card shadow-sm">
+                {/* Basic user display for now */}
+                <div className="w-16 h-16 bg-muted rounded-full mb-2 mx-auto flex items-center justify-center text-xl font-semibold">
+                  {simUser.name.substring(0,1).toUpperCase()}
+                </div>
+                <p className="text-sm font-medium truncate">{simUser.name}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* User Reviews Section */}
-      <div>
+      <div className="mt-16">
         <h2 className="text-2xl font-bold mb-6 flex items-center">
           <MessageSquare className="mr-3 h-6 w-6" />
           Reviews by {user.name} ({userReviews.length})
         </h2>
         {userReviews && userReviews.length > 0 ? (
-          <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6"> {/* Changed to grid layout */}
             {userReviews.map((review: Review) => (
-              <div key={review.id} className="bg-card border p-4 rounded-lg shadow">
-                {review.bookTitle && (
-                  <h3 className="text-lg font-semibold mb-2">
-                    Review for <Link to="/books/$id" params={{id: review.bookId || "" }} className="text-primary hover:underline">{review.bookTitle}</Link>
-                  </h3>
-                )}
-                <ReviewCard review={review} />
-              </div>
+              <PersonReviewCard key={review.id} review={review} /> // Used PersonReviewCard
             ))}
           </div>
         ) : (

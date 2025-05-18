@@ -35,6 +35,7 @@ LIMIT $1 OFFSET $2;
 -- name: GetUserLibraryDetails :many
 SELECT
     b.id,
+    b.goodreads_id, -- Added goodreads_id
     b.title,
     b.cover_image_url,
     COALESCE(ARRAY_AGG(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL), '{}') AS authors
@@ -51,6 +52,7 @@ SELECT
     r.id AS review_id,
     r.book_id,
     b.title AS book_title,
+    b.cover_image_url AS book_cover_image_url, -- Added book cover
     r.user_id,
     r.rating,
     r.text AS review_text, -- Corrected column name from review_text to text

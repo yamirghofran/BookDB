@@ -38,6 +38,7 @@ export interface Book {
     userAvatar?: string
     bookId?: string;   // Added for context on PersonDetails page
     bookTitle?: string; // Added for context on PersonDetails page
+    bookCoverUrl?: string; // Added for PersonReviewCard
   }
 
 export interface UserInLibrary {

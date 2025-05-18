@@ -88,8 +88,10 @@ func (s *Server) setupRouter() {
 		recommendations := api.Group("/recommendations")
 		{
 			recommendations.GET("/books/:id/similar", s.Handlers.GetSimilarBooks)
-			recommendations.GET("/users/:id", s.Handlers.GetRecommendationsForUser)
-			recommendations.POST("/anonymous", s.Handlers.GetAnonymousRecommendations) // New route
+			// recommendations.GET("/users/:id", s.Handlers.GetRecommendationsForUser) // This was for collaborative filtering by user for books
+			recommendations.POST("/anonymous", s.Handlers.GetAnonymousRecommendations)
+			recommendations.GET("/users/:id/similar", s.Handlers.GetSimilarUsers)             // New route for similar users
+			recommendations.GET("/users/:id/books", s.Handlers.GetBookRecommendationsForUser) // New route for book recommendations for a user
 		}
 
 		// Auth endpoints
