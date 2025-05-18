@@ -53,6 +53,7 @@ services:
   # PostgreSQL database
   postgres:
     image: postgres:16-alpine
+    container_name: bookdb-postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init-minimal.sql:/docker-entrypoint-initdb.d/init.sql
