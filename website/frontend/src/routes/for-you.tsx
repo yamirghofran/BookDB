@@ -72,7 +72,7 @@ function ForYouPage() {
       {recommendedBooks && recommendedBooks.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
           {recommendedBooks.map((book: Book) => (
-            <Link to={`/books/${book.id}`} key={book.id} className="h-full">
+            <Link to="/books/$id" params={{ id: book.id }} key={book.id} className="h-full"> {/* Modified Link */}
               <BookCard book={book} />
             </Link>
           ))}

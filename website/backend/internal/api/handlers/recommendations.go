@@ -209,6 +209,19 @@ func (h *Handler) GetAnonymousRecommendations(c *gin.Context) {
 		}
 	}
 
+	// Filter out any of the original inputGoodreadsIDs from the recommendations
+	finalRecommendedGoodreadsIDs := make([]int64, 0, len(recommendedGoodreadsIDs))
+	inputIDSet := make(map[int64]struct{})
+	for _, id := range inputGoodreadsIDs {
+		inputIDSet[id] = struct{}{}
+	}
+	for _, recID := range recommendedGoodreadsIDs {
+		if _, exists := inputIDSet[recID]; !exists {
+			finalRecommendedGoodreadsIDs = append(finalRecommendedGoodreadsIDs, recID)
+		}
+	}
+	recommendedGoodreadsIDs = finalRecommendedGoodreadsIDs // Update with filtered list
+
 	if len(recommendedGoodreadsIDs) == 0 {
 		c.JSON(http.StatusOK, []BookResponse{})
 		return
@@ -255,53 +268,109 @@ func (h *Handler) GetAnonymousRecommendations(c *gin.Context) {
 	c.JSON(http.StatusOK, responseBooks)
 }
 
-// GetContentBasedRecommendations returns content-based recommendations for a book
-// (Existing function - assuming it might be updated or used separately)
-func (rs *RecommendationService) GetContentBasedRecommendations(c *gin.Context) {
-	bookIDStr := c.Param("bookId") // Changed from "bookId" to "id" if it's a path param like /books/:id/similar
-	// If it's a query param book_id=... then c.Query("book_id")
+// GetContentBasedRecommendations returns content-based recommendations for a single book (by its UUID)
+func (h *Handler) GetContentBasedRecommendations(c *gin.Context) { // Changed receiver to *Handler
+	bookUUIDStr := c.Param("id") // Path param from /recommendations/books/:id/similar
+	ctx := c.Request.Context()
 
-	// Assuming bookIDStr is a Goodreads ID for sbert_embeddings
-	bookGID, err := strconv.ParseInt(bookIDStr, 10, 64)
+	bookUUID, err := uuid.Parse(bookUUIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid book ID format, expected Goodreads ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid book UUID format"})
+		return
+	}
+	pgBookUUID := pgtype.UUID{Bytes: bookUUID, Valid: true}
+
+	// 1. Get the Goodreads ID of the input book
+	sourceBook, err := h.DB.GetBookByID(ctx, pgBookUUID) // db.GetBookByIDRow
+	if err != nil {
+		fmt.Printf("Error fetching source book %s for similar: %v\n", bookUUIDStr, err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Source book not found"})
+		return
+	}
+	sourceGoodreadsID := sourceBook.GoodreadsID
+
+	// 2. Get the embedding for the source book's Goodreads ID
+	// Using "gmf_book_embeddings" as per rec_example for averaging, implies it's a good general purpose embedding.
+	// Or use "sbert_embeddings" if that's preferred for content similarity. Let's use "gmf_book_embeddings" for consistency.
+	qdrantCollection := "gmf_book_embeddings" // Or "sbert_embeddings"
+	sourceEmbedding, err := getEmbeddingByGoodreadsID(ctx, h.QdrantClient, sourceGoodreadsID, qdrantCollection)
+	if err != nil {
+		fmt.Printf("Error getting embedding for source book GoodreadsID %d: %v\n", sourceGoodreadsID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not retrieve embedding for source book"})
 		return
 	}
 
-	limit := uint64(10) // How many similar items to fetch
-	// Query nearest by ID using sbert_embeddings
-	// The ID in sbert_embeddings might be the Goodreads ID or an internal sequential ID.
-	// rec_example.go uses qdrant.NewIDNum(uint64(id)) for sbert_embeddings with ID 13.
-	// This implies sbert_embeddings also uses numerical IDs.
-	// If sbert_embeddings uses book UUIDs as string IDs, then qdrant.NewID(bookIDStr) would be used.
-	// For now, assuming numerical Goodreads ID.
-
-	similarPoints, err := rs.QdrantClient.Query(context.Background(), &qdrant.QueryPoints{
-		CollectionName: "sbert_embeddings", // Or "gmf_book_embeddings" if using those for content
-		Query:          qdrant.NewQueryID(qdrant.NewIDNum(uint64(bookGID))),
-		Limit:          &limit,
-		// Add filter to exclude the source bookID itself
-		Filter: &qdrant.Filter{
-			MustNot: []*qdrant.Condition{
-				// Assuming 'goodreads_id' is a payload field for sbert_embeddings as well
-				qdrant.NewMatchInt("goodreads_id", bookGID),
-			},
-		},
-	})
-
+	// 3. Query Qdrant for similar books, excluding the source book itself
+	recommendationLimit := uint64(10)
+	similarPoints, err := querySimilarByVectorWithExclusion(ctx, h.QdrantClient, qdrantCollection, sourceEmbedding, recommendationLimit, []int64{sourceGoodreadsID})
 	if err != nil {
-		fmt.Printf("Error querying Qdrant for content-based recs: %v\n", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve similar books"})
+		fmt.Printf("Error querying Qdrant for similar books to %d: %v\n", sourceGoodreadsID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to find similar books"})
 		return
 	}
 
-	// The similarPoints contain Qdrant point IDs. These need to be mapped back to actual book details.
-	// This part is similar to GetAnonymousRecommendations: extract IDs, fetch from DB, map to BookResponse.
-	// For brevity, I'll skip the full DB fetch and mapping here, assuming the structure of response is understood.
-	// You would extract IDs from similarPoints, then call h.DB.GetBooksByGoodreadsIDs (if IDs are GIDs)
-	// or h.DB.GetBooksByIDs (if IDs are UUIDs, and you have such a query).
+	if len(similarPoints) == 0 {
+		c.JSON(http.StatusOK, []BookResponse{})
+		return
+	}
 
-	c.JSON(http.StatusOK, similarPoints) // Placeholder: ideally return []BookResponse
+	recommendedGoodreadsIDs := make([]int64, 0, len(similarPoints))
+	for _, point := range similarPoints {
+		if point.Id != nil {
+			recommendedGoodreadsIDs = append(recommendedGoodreadsIDs, int64(point.Id.GetNum()))
+		}
+	}
+
+	// Filter out the sourceGoodreadsID from the recommendations, if present
+	finalRecommendedGoodreadsIDsCB := make([]int64, 0, len(recommendedGoodreadsIDs))
+	for _, recID := range recommendedGoodreadsIDs {
+		if recID != sourceGoodreadsID {
+			finalRecommendedGoodreadsIDsCB = append(finalRecommendedGoodreadsIDsCB, recID)
+		}
+	}
+	recommendedGoodreadsIDs = finalRecommendedGoodreadsIDsCB // Update with filtered list
+
+	if len(recommendedGoodreadsIDs) == 0 {
+		c.JSON(http.StatusOK, []BookResponse{})
+		return
+	}
+
+	// 4. Fetch full book details for the recommended Goodreads IDs
+	dbBooks, err := h.DB.GetBooksByGoodreadsIDs(ctx, recommendedGoodreadsIDs)
+	if err != nil {
+		fmt.Printf("Error fetching recommended book details from DB: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch recommended book details"})
+		return
+	}
+
+	responseBooks := make([]BookResponse, 0, len(dbBooks))
+	for _, bookRow := range dbBooks {
+		var apiAvgRating *float64
+		if bookRow.AverageRating.Valid {
+			float8Val, convErr := bookRow.AverageRating.Float64Value()
+			if convErr == nil && float8Val.Valid {
+				apiAvgRating = &float8Val.Float64
+			} else if convErr != nil {
+				fmt.Printf("Error converting AverageRating for book ID %v: %v\n", bookRow.ID, convErr)
+			}
+		}
+		responseBooks = append(responseBooks, BookResponse{
+			ID:              bookRow.ID,
+			GoodreadsID:     bookRow.GoodreadsID,
+			GoodreadsUrl:    bookRow.GoodreadsUrl,
+			Title:           bookRow.Title,
+			Description:     bookRow.Description,
+			PublicationYear: bookRow.PublicationYear,
+			CoverImageUrl:   bookRow.CoverImageUrl,
+			AverageRating:   apiAvgRating,
+			RatingsCount:    bookRow.RatingsCount,
+			Authors:         processStringArrayInterface(bookRow.Authors),
+			Genres:          processStringArrayInterface(bookRow.Genres),
+			CreatedAt:       bookRow.CreatedAt,
+			UpdatedAt:       bookRow.UpdatedAt,
+		})
+	}
+	c.JSON(http.StatusOK, responseBooks)
 }
 
 // GetCollaborativeRecommendations returns collaborative filtering recommendations for a user

@@ -1054,14 +1054,9 @@ func (h *Handler) GetBooksByAuthor(c *gin.Context) {
 
 // GetSimilarBooks returns similar books based on content-based filtering
 func (h *Handler) GetSimilarBooks(c *gin.Context) {
-	// Create a new recommendation service
-	rs := &RecommendationService{
-		QdrantClient: *h.QdrantClient, // Dereference the pointer
-		// DB:           h.DB,             // Pass the DB connection - Temporarily commented out
-	}
-
-	// Delegate to the content-based recommendations handler
-	rs.GetContentBasedRecommendations(c)
+	// The GetContentBasedRecommendations method is now directly on Handler
+	// because it needs access to h.DB and h.QdrantClient.
+	h.GetContentBasedRecommendations(c)
 }
 
 // GetRecommendationsForUser returns book recommendations for a specific user

@@ -1,4 +1,5 @@
 import { useState, useRef } from "react"
+import { Link } from "@tanstack/react-router" // Added Link import
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import BookCard from "./book-card"
 import type { Book } from "@/lib/types"
@@ -60,7 +61,9 @@ export default function BookCarousel({ books }: BookCarouselProps) {
       <div ref={carouselRef} className="flex overflow-x-auto gap-4 pb-4 scrollbar-hide snap-x" onScroll={handleScroll}>
         {books.map((book) => (
           <div key={book.id} className="min-w-[240px] snap-start">
-            <BookCard book={book} />
+            <Link to="/books/$id" params={{ id: book.id }} className="block h-full"> {/* Modified Link */}
+              <BookCard book={book} />
+            </Link>
           </div>
         ))}
       </div>
