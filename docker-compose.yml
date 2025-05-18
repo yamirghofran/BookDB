@@ -23,8 +23,6 @@ services:
       context: ./website/backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -33,6 +31,11 @@ services:
       - DB_NAME=${POSTGRES_DB:-bookdb}
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+      - APP_ENV=${APP_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PORT=${PORT:-8080}
+      - JWT_SECRET=${JWT_SECRET:-changeme}
+      - JWT_EXPIRATION=${JWT_EXPIRATION:-24h}
     depends_on:
       - postgres
       - qdrant
@@ -69,6 +72,8 @@ services:
     image: qdrant/qdrant:latest
     volumes:
       - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
     restart: unless-stopped
     networks:
       - backend-network
