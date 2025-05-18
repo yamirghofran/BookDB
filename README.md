@@ -1,6 +1,17 @@
 # BookDB
 
-Include a brief introduction outlining what the project does and offers to potential users. Be sure to detail the problem(s) and objective(s) the project addresses.
+BookDB is a book recommendation system that uses vector embeddings and collaborative filtering to suggest personalized reading recommendations to users. The application provides an intuitive interface for users to discover new books based on their reading history and preferences.
+
+## Architecture
+
+BookDB uses a microservices architecture with the following components:
+
+- **Frontend**: React-based web application 
+- **Backend**: Go API service
+- **PostgreSQL**: SQL database for structured data
+- **Qdrant**: Vector database for similarity search
+
+All components are containerized using Docker for easy deployment and scalability.
 
 ## Dataset
 
@@ -22,3 +33,19 @@ Provide instructions on training and tuning the model, along with the necessary 
 ## Design and Development
 
 Ensure the engineering shines! Describe and justify the library design, and refer to the documentation.
+
+## Deployment
+
+BookDB is designed to be easily deployed using Docker containers.
+
+### Deployment Options
+
+- **Standard Deployment**: See [DEPLOYMENT.md](DEPLOYMENT.md) for direct Docker Compose deployment
+- **Portainer Deployment**: See [DOCKER.md](DOCKER.md) for Portainer-specific instructions
+
+### Infrastructure Requirements
+
+- Docker and Docker Compose
+- Minimum 2GB RAM for all services
+- At least 10GB free disk space for container images and data volumes
+- PostgreSQL and Qdrant databases (automatically deployed as containers)

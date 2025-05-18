@@ -1,34 +1,87 @@
 services:
+  # Frontend service with nginx for development
+  frontend:
+    build:
+      context: ./website/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80" # Expose frontend on port 8080 for local development
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - frontend_dev
+    container_name: bookdb-frontend-dev
+    environment:
+      - BACKEND_SERVICE=backend
+      - QDRANT_SERVICE=qdrant
+    volumes:
+      # Enable hot-reloading for frontend development (optional)
+      - ./website/frontend:/app:ro
+
+  # Backend Go service
+  backend:
+    build:
+      context: ./website/backend
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8080" # Expose backend API port for direct testing
+    restart: unless-stopped
+    env_file:
+      - .env.dev
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=bookdb_dev
+      - DB_PASSWORD=bookdb_dev_password
+      - DB_NAME=bookdb_dev
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    depends_on:
+      - postgres
+      - qdrant
+    networks:
+      - backend_dev
+      - frontend_dev
+    container_name: bookdb-backend-dev
+
+  # PostgreSQL database for development
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432" # Expose postgres port for direct connections during development
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+      - ./postgres:/docker-entrypoint-initdb.d
+    environment:
+      - POSTGRES_USER=bookdb_dev
+      - POSTGRES_PASSWORD=bookdb_dev_password
+      - POSTGRES_DB=bookdb_dev
+    restart: unless-stopped
+    networks:
+      - backend_dev
+    container_name: bookdb-postgres-dev
+
+  # Qdrant vector database
   qdrant:
     image: qdrant/qdrant:latest
-    volumes:
-      - qdrant_data:/qdrant/storage
-    # No exposed ports in dev - access through nginx
-    restart: unless-stopped
-    networks:
-      - bookdb_dev
-    # container_name for clear identification
-    container_name: qdrant-test
-
-  nginx:
-    build:
-      context: .
-      dockerfile: ./nginx/Dockerfile
     ports:
-      - "8080:80" # Expose only Nginx port for local testing
-    depends_on:
-      - qdrant
+      - "6333:6333" # Expose Qdrant port for direct management during development
+    volumes:
+      - qdrant_data_dev:/qdrant/storage
     restart: unless-stopped
     networks:
-      - bookdb_dev
-      - default
-    # Container name for service discovery
-    container_name: bookdb-nginx-test
+      - backend_dev
+    container_name: qdrant-dev
 
 volumes:
-  qdrant_data:
+  postgres_data_dev:
+    driver: local
+  qdrant_data_dev:
     driver: local
 
 networks:
-  bookdb_dev:
+  frontend_dev:
+    driver: bridge
+  backend_dev:
     driver: bridge
