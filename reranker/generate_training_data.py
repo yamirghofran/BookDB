@@ -19,9 +19,9 @@ def main():
 
     # Load the data
     logger.info("Loading data...")
-    user_book_lists = dd.read_parquet("data/reduced_interactions.parquet")
-    reduced_books_df = dd.read_parquet("data/reduced_books.parquet")
-    book_texts_reduced = dd.read_parquet("data/book_texts_reduced.parquet")
+    user_book_lists = dd.read_parquet("data/sampled_users_book.parquet", engine='pyarrow')
+    reduced_books_df = dd.read_parquet("data/reduce_books_df.parquet", engine='pyarrow')
+    book_texts_reduced = dd.read_parquet("data/book_texts_reduced.parquet", engine='pyarrow')
 
     # Generate training data with progress tracking
     logger.info("Starting training data generation...")

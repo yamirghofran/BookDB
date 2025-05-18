@@ -5,6 +5,7 @@ from collections import Counter
 from pathlib import Path
 from tqdm import tqdm
 import logging
+import ast  # Add this import
 
 # Set up logging
 logging.basicConfig(
@@ -160,6 +161,10 @@ def _process_dask_partition(
     Process a partition of user data to generate training pairs.
     Optimized for memory usage and includes progress tracking.
     """
+    logger.info(f"Starting partition processing. Partition shape: {partition_df.shape}")
+    logger.info(f"Number of unique book IDs in metadata: {len(all_book_ids_set)}")
+    logger.info(f"Number of books in texts dict: {len(book_texts_dict)}")
+    
     pairs = []
     total_users = len(partition_df)
     
@@ -168,21 +173,33 @@ def _process_dask_partition(
             logger.info(f"Processing user {idx}/{total_users} in partition")
             
         user_id = row.user_id
-        user_top_books = row.top_books
+        # Convert string representation of list to actual list
+        try:
+            user_top_books = ast.literal_eval(row.books_read)
+            logger.info(f"User {user_id} has {len(user_top_books)} books")
+        except (ValueError, SyntaxError) as e:
+            logger.warning(f"Could not parse books_read for user {user_id}: {str(e)}")
+            continue
         
         # Skip users with no books
         if not user_top_books:
+            logger.warning(f"User {user_id} has no books")
             continue
             
         # Process each book in user's top books
         for target_book in user_top_books:
+            # Convert book_id to string if it's not already
+            target_book = str(target_book)
+            
             # Skip if book not in our dataset
             if target_book not in all_book_ids_set:
+                logger.debug(f"Book {target_book} not in metadata")
                 continue
                 
             # Get book text
             book_text = book_texts_dict.get(target_book)
             if not book_text:
+                logger.debug(f"No text found for book {target_book}")
                 continue
                 
             # Generate user context
@@ -194,6 +211,10 @@ def _process_dask_partition(
                 topk_books=topk_books_ctx,
                 topk_genres=topk_genres_ctx
             )
+            
+            if not user_ctx:
+                logger.warning(f"Could not generate context for user {user_id} and book {target_book}")
+                continue
             
             # Add positive pair
             pairs.append({
@@ -213,15 +234,17 @@ def _process_dask_partition(
             
             # Add negative pairs
             for neg_book in neg_books:
-                neg_text = book_texts_dict.get(neg_book)
+                neg_text = book_texts_dict.get(str(neg_book))
                 if neg_text:
                     pairs.append({
                         'user_id': user_id,
-                        'book_id': neg_book,
+                        'book_id': str(neg_book),
                         'user_ctx': user_ctx,
                         'book_text': neg_text,
                         'label': 0
                     })
+    
+    logger.info(f"Generated {len(pairs)} pairs in this partition")
     
     # Convert to DataFrame
     if pairs:
@@ -341,12 +364,18 @@ def generate_training_data_dask(
     # 1. Compute and cache the book metadata and texts
     logger.info("Computing and caching book metadata...")
     book_meta_pd = reduced_books_ddf.compute()
+    logger.info(f"Book metadata shape: {book_meta_pd.shape}")
+    
     logger.info("Computing and caching book texts...")
     book_texts_pd = reduced_book_texts_ddf.compute()
+    logger.info(f"Book texts shape: {book_texts_pd.shape}")
     
     # Convert to dictionaries for faster lookups
-    book_texts_dict = dict(zip(book_texts_pd['book_id'], book_texts_pd['text']))
-    all_book_ids_set = set(book_meta_pd['book_id'].unique())
+    book_texts_dict = dict(zip(book_texts_pd['book_id'].astype(str), book_texts_pd['text']))
+    all_book_ids_set = set(book_meta_pd['book_id'].astype(str))
+    
+    logger.info(f"Number of unique book IDs: {len(all_book_ids_set)}")
+    logger.info(f"Number of books with texts: {len(book_texts_dict)}")
     
     # 2. Repartition if needed
     if dask_partitions > 0:
@@ -394,6 +423,37 @@ def generate_training_data_dask(
     
     logger.info("Training data generation completed!")
     return training_pairs_ddf
+
+def generate_negative_samples(
+    user_top_books: list,
+    all_book_ids_set: set,
+    neg_ratio: int = 3
+) -> list:
+    """
+    Generate negative samples for a user.
+    
+    Args:
+        user_top_books: List of books the user has read
+        all_book_ids_set: Set of all available book IDs
+        neg_ratio: Number of negative samples to generate per positive sample
+        
+    Returns:
+        List of book IDs that the user hasn't read
+    """
+    # Convert user's books to set for faster lookup
+    user_books_set = set(str(book_id) for book_id in user_top_books)
+    
+    # Get books the user hasn't read
+    available_neg_books = list(all_book_ids_set - user_books_set)
+    
+    # If we don't have enough negative books, use all available ones
+    num_neg_samples = min(neg_ratio, len(available_neg_books))
+    
+    if num_neg_samples == 0:
+        return []
+        
+    # Randomly sample negative books
+    return random.sample(available_neg_books, num_neg_samples)
 
 def main():
     import argparse
