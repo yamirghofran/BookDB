@@ -14,6 +14,7 @@ import { Route as rootRoute } from './routes/__root'
 import { Route as LibraryImport } from './routes/library'
 import { Route as ForYouImport } from './routes/for-you'
 import { Route as IndexImport } from './routes/index'
+import { Route as PeopleIdImport } from './routes/people.$id'
 import { Route as DemoTanstackQueryImport } from './routes/demo.tanstack-query'
 import { Route as BooksIdImport } from './routes/books.$id'
 
@@ -34,6 +35,12 @@ const ForYouRoute = ForYouImport.update({
 const IndexRoute = IndexImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRoute,
+} as any)
+
+const PeopleIdRoute = PeopleIdImport.update({
+  id: '/people/$id',
+  path: '/people/$id',
   getParentRoute: () => rootRoute,
 } as any)
 
@@ -88,6 +95,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DemoTanstackQueryImport
       parentRoute: typeof rootRoute
     }
+    '/people/$id': {
+      id: '/people/$id'
+      path: '/people/$id'
+      fullPath: '/people/$id'
+      preLoaderRoute: typeof PeopleIdImport
+      parentRoute: typeof rootRoute
+    }
   }
 }
 
@@ -99,6 +113,7 @@ export interface FileRoutesByFullPath {
   '/library': typeof LibraryRoute
   '/books/$id': typeof BooksIdRoute
   '/demo/tanstack-query': typeof DemoTanstackQueryRoute
+  '/people/$id': typeof PeopleIdRoute
 }
 
 export interface FileRoutesByTo {
@@ -107,6 +122,7 @@ export interface FileRoutesByTo {
   '/library': typeof LibraryRoute
   '/books/$id': typeof BooksIdRoute
   '/demo/tanstack-query': typeof DemoTanstackQueryRoute
+  '/people/$id': typeof PeopleIdRoute
 }
 
 export interface FileRoutesById {
@@ -116,6 +132,7 @@ export interface FileRoutesById {
   '/library': typeof LibraryRoute
   '/books/$id': typeof BooksIdRoute
   '/demo/tanstack-query': typeof DemoTanstackQueryRoute
+  '/people/$id': typeof PeopleIdRoute
 }
 
 export interface FileRouteTypes {
@@ -126,8 +143,15 @@ export interface FileRouteTypes {
     | '/library'
     | '/books/$id'
     | '/demo/tanstack-query'
+    | '/people/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/for-you' | '/library' | '/books/$id' | '/demo/tanstack-query'
+  to:
+    | '/'
+    | '/for-you'
+    | '/library'
+    | '/books/$id'
+    | '/demo/tanstack-query'
+    | '/people/$id'
   id:
     | '__root__'
     | '/'
@@ -135,6 +159,7 @@ export interface FileRouteTypes {
     | '/library'
     | '/books/$id'
     | '/demo/tanstack-query'
+    | '/people/$id'
   fileRoutesById: FileRoutesById
 }
 
@@ -144,6 +169,7 @@ export interface RootRouteChildren {
   LibraryRoute: typeof LibraryRoute
   BooksIdRoute: typeof BooksIdRoute
   DemoTanstackQueryRoute: typeof DemoTanstackQueryRoute
+  PeopleIdRoute: typeof PeopleIdRoute
 }
 
 const rootRouteChildren: RootRouteChildren = {
@@ -152,6 +178,7 @@ const rootRouteChildren: RootRouteChildren = {
   LibraryRoute: LibraryRoute,
   BooksIdRoute: BooksIdRoute,
   DemoTanstackQueryRoute: DemoTanstackQueryRoute,
+  PeopleIdRoute: PeopleIdRoute,
 }
 
 export const routeTree = rootRoute
@@ -168,7 +195,8 @@ export const routeTree = rootRoute
         "/for-you",
         "/library",
         "/books/$id",
-        "/demo/tanstack-query"
+        "/demo/tanstack-query",
+        "/people/$id"
       ]
     },
     "/": {
@@ -185,6 +213,9 @@ export const routeTree = rootRoute
     },
     "/demo/tanstack-query": {
       "filePath": "demo.tanstack-query.tsx"
+    },
+    "/people/$id": {
+      "filePath": "people.$id.tsx"
     }
   }
 }

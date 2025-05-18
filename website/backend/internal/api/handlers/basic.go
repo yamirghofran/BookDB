@@ -1193,3 +1193,103 @@ func (h *Handler) GetUsersWithBookInLibrary(c *gin.Context) {
 		"limit":      limit,
 	})
 }
+
+// Person Details Page Structures
+
+type UserLibraryBookDetail struct {
+	ID            pgtype.UUID `json:"ID"`
+	Title         string      `json:"Title"`
+	CoverImageUrl pgtype.Text `json:"CoverImageUrl,omitempty"`
+	Authors       []string    `json:"Authors"`
+}
+
+type UserReviewWithBookInfo struct {
+	ReviewID        pgtype.UUID        `json:"reviewId"`
+	BookID          pgtype.UUID        `json:"bookId"`
+	BookTitle       string             `json:"bookTitle"`
+	UserID          pgtype.UUID        `json:"userId"`
+	Rating          pgtype.Int2        `json:"rating"`
+	ReviewText      string             `json:"reviewText"`
+	ReviewCreatedAt pgtype.Timestamptz `json:"reviewCreatedAt"`
+	ReviewUpdatedAt pgtype.Timestamptz `json:"reviewUpdatedAt"`
+}
+
+type PersonDetailResponse struct {
+	User         db.User                  `json:"user"`
+	LibraryBooks []UserLibraryBookDetail  `json:"libraryBooks"`
+	UserReviews  []UserReviewWithBookInfo `json:"userReviews"`
+}
+
+// GetPersonDetails fetches details for a specific user, including their library and reviews.
+func (h *Handler) GetPersonDetails(c *gin.Context) {
+	userIDStr := c.Param("id")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID format"})
+		return
+	}
+	pgUserID := pgtype.UUID{Bytes: userID, Valid: true}
+	ctx := c.Request.Context()
+
+	// 1. Get User Info
+	dbUserRow, err := h.DB.GetUserByID(ctx, pgUserID) // Returns db.GetUserByIDRow
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+	// Manually construct db.User from db.GetUserByIDRow
+	user := db.User{
+		ID:        dbUserRow.ID,
+		Name:      dbUserRow.Name,
+		Email:     dbUserRow.Email,
+		CreatedAt: dbUserRow.CreatedAt,
+		UpdatedAt: dbUserRow.UpdatedAt,
+		// NcfID is not in GetUserByIDRow, if needed, the query or PersonDetailResponse.User type must change
+	}
+
+	// 2. Get User Library Details
+	dbLibraryBooks, err := h.DB.GetUserLibraryDetails(ctx, pgUserID)
+	if err != nil {
+		fmt.Printf("Error fetching library details for user %s: %v\n", userIDStr, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch user library details"})
+		return
+	}
+	libraryBooks := make([]UserLibraryBookDetail, 0, len(dbLibraryBooks))
+	for _, dbBook := range dbLibraryBooks {
+		libraryBooks = append(libraryBooks, UserLibraryBookDetail{
+			ID:            dbBook.ID,
+			Title:         dbBook.Title,
+			CoverImageUrl: dbBook.CoverImageUrl,
+			Authors:       processStringArrayInterface(dbBook.Authors),
+		})
+	}
+
+	// 3. Get User Reviews
+	dbUserReviews, err := h.DB.GetUserReviewsWithBookInfo(ctx, pgUserID)
+	if err != nil {
+		fmt.Printf("Error fetching reviews for user %s: %v\n", userIDStr, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch user reviews"})
+		return
+	}
+	userReviews := make([]UserReviewWithBookInfo, 0, len(dbUserReviews))
+	for _, dbReview := range dbUserReviews {
+		userReviews = append(userReviews, UserReviewWithBookInfo{
+			ReviewID:        dbReview.ReviewID,
+			BookID:          dbReview.BookID,
+			BookTitle:       dbReview.BookTitle,
+			UserID:          dbReview.UserID,
+			Rating:          dbReview.Rating,
+			ReviewText:      dbReview.ReviewText,
+			ReviewCreatedAt: dbReview.ReviewCreatedAt,
+			ReviewUpdatedAt: dbReview.ReviewUpdatedAt,
+		})
+	}
+
+	response := PersonDetailResponse{
+		User:         user,
+		LibraryBooks: libraryBooks,
+		UserReviews:  userReviews,
+	}
+
+	c.JSON(http.StatusOK, response)
+}

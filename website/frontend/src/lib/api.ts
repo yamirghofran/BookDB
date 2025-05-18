@@ -1,9 +1,4 @@
-export interface Person {
-  id: string; // Assuming Go backend provides ID as string (e.g., UUID)
-  name: string;
-  email: string;
-  age?: number; // Keep for interface flexibility, but not used in current Go backend for people
-}
+import type { Person, Book as BookFromTypes, PaginatedUsersResponse, PersonDetails } from "./types"; // Added Person to import
 
 const API_BASE_URL = "/api";
 
@@ -36,8 +31,6 @@ export async function addPerson(personData: AddPersonPayload): Promise<Person> {
   }
   return response.json();
 }
-
-import type { Book as BookFromTypes, PaginatedUsersResponse } from "./types";
 
 // Interface representing the raw book structure from the backend API
 interface RawBookFromAPI {
@@ -322,6 +315,106 @@ export async function fetchAnonymousRecommendations(likedBookIds: string[]): Pro
     // Other fields like averageRating, ratingsCount might be present if backend sends them
     // and BookFromTypes includes them. For now, mapping the core fields.
   }));
+}
+
+// Raw type definitions for data coming from the backend for person details
+interface RawUserLibraryBookDetail { // Keep this internal to api.ts if only used for mapping here
+  ID: string;
+  Title: string;
+  CoverImageUrl?: {
+    String: string;
+    Valid: boolean;
+  } | string | null;
+  Authors: string[];
+}
+
+interface RawUserReviewWithBookInfo { // Keep this internal to api.ts if only used for mapping here
+  reviewId: string;
+  bookId: string;
+  bookTitle: string;
+  userId: string;
+  rating: { Int16: number, Valid: boolean } | number | null;
+  reviewText: string;
+  reviewCreatedAt: { Time: string, Valid: boolean } | string;
+  reviewUpdatedAt: { Time: string, Valid: boolean } | string;
+}
+
+export async function fetchPersonDetails(userId: string): Promise<PersonDetails> {
+  const response = await fetch(`${API_BASE_URL}/people/${userId}/details`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: `Failed to fetch details for user ${userId}` }));
+    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+  }
+  const rawData = await response.json();
+  console.log(`Raw person details from API (user ID: ${userId}):`, rawData);
+
+  // Map rawData.user (db.User) to frontend Person type
+  const mappedUser: Person = {
+    id: rawData.user.ID, // Corrected to capitalized ID
+    name: rawData.user.Name, // Corrected to capitalized Name
+    email: rawData.user.Email, // Corrected to capitalized Email
+    // age is not in db.User
+  };
+
+  // Map rawData.libraryBooks to frontend BookFromTypes[]
+  const mappedLibraryBooks: BookFromTypes[] = (rawData.libraryBooks || []).map((rawBook: RawUserLibraryBookDetail): BookFromTypes => {
+    let coverUrl = "";
+    if (rawBook.CoverImageUrl) {
+      if (typeof rawBook.CoverImageUrl === 'string') {
+        coverUrl = rawBook.CoverImageUrl;
+      } else if (rawBook.CoverImageUrl.Valid) {
+        coverUrl = rawBook.CoverImageUrl.String;
+      }
+    }
+    return {
+      id: rawBook.ID,
+      title: rawBook.Title,
+      authors: Array.isArray(rawBook.Authors) ? rawBook.Authors : [],
+      coverUrl: coverUrl,
+      // description, genre, etc., are not in RawUserLibraryBookDetail, so they'll be undefined
+    };
+  });
+
+  // Map rawData.userReviews to frontend Review[]
+  const mappedUserReviews: import("./types").Review[] = (rawData.userReviews || []).map((rawReview: RawUserReviewWithBookInfo): import("./types").Review => {
+    let rating = 0;
+    if (rawReview.rating) {
+      if (typeof rawReview.rating === 'number') {
+        rating = rawReview.rating;
+      } else if (rawReview.rating.Valid) {
+        rating = rawReview.rating.Int16;
+      }
+    }
+    let createdAt = "";
+     if (rawReview.reviewCreatedAt) {
+      if (typeof rawReview.reviewCreatedAt === 'string') {
+        createdAt = new Date(rawReview.reviewCreatedAt).toISOString().split("T")[0];
+      } else if (rawReview.reviewCreatedAt.Valid) {
+        createdAt = new Date(rawReview.reviewCreatedAt.Time).toISOString().split("T")[0];
+      }
+    }
+
+    return {
+      id: rawReview.reviewId,
+      userId: rawReview.userId, // Added missing userId
+      bookId: rawReview.bookId,
+      bookTitle: rawReview.bookTitle, // Added bookTitle
+      // userName for ReviewCard should be the person whose page we are on.
+      // The backend sends rawReview.userId, but ReviewCard expects userName.
+      // We can use mappedUser.name here.
+      userName: mappedUser.name,
+      userAvatar: "/placeholder.svg?height=50&width=50", // Placeholder, not in RawUserReviewWithBookInfo
+      rating: rating,
+      text: rawReview.reviewText,
+      date: createdAt,
+    };
+  });
+
+  return {
+    user: mappedUser,
+    libraryBooks: mappedLibraryBooks,
+    userReviews: mappedUserReviews,
+  };
 }
 
 

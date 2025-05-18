@@ -1,3 +1,11 @@
+// Add Person interface here
+export interface Person {
+  id: string;
+  name: string;
+  email: string;
+  age?: number;
+}
+
 export interface Book {
     id: string
     title: string
@@ -28,6 +36,8 @@ export interface Book {
     date: string
     rating?: number
     userAvatar?: string
+    bookId?: string;   // Added for context on PersonDetails page
+    bookTitle?: string; // Added for context on PersonDetails page
   }
 
 export interface UserInLibrary {
@@ -41,4 +51,10 @@ export interface PaginatedUsersResponse {
   totalUsers: number;
   page: number;
   limit: number;
+}
+
+export interface PersonDetails {
+  user: Person;
+  libraryBooks: Book[]; // Uses the existing Book type
+  userReviews: Review[]; // Uses the existing Review type
 }

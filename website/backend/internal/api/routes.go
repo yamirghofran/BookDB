@@ -72,6 +72,7 @@ func (s *Server) setupRouter() {
 			people.GET("", s.Handlers.ListPeople)
 			people.GET("/:id", s.Handlers.GetPerson)
 			people.POST("", s.Handlers.CreatePerson)
+			people.GET("/:id/details", s.Handlers.GetPersonDetails) // New route for person details
 		}
 
 		// Library endpoints

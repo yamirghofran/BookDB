@@ -324,11 +324,11 @@ function BookDetailsPage() {
 						<>
 							<div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
 								{usersInLibraryData.users.map((user: UserInLibrary) => (
-									<div key={user.id} className="border p-3 rounded-md bg-background shadow-sm">
+									<Link key={user.id} to="/people/$id" params={{ id: user.id }} className="block hover:bg-muted/50 p-3 rounded-md border bg-background shadow-sm transition-colors">
 										{/* Placeholder for avatar - replace with actual img if available */}
 										<div className="w-10 h-10 bg-muted rounded-full mb-2 mx-auto"></div>
 										<p className="text-sm font-medium text-center truncate">{user.name}</p>
-									</div>
+									</Link>
 								))}
 							</div>
 							{/* Pagination for users in library */}
