@@ -7,9 +7,7 @@ services:
     container_name: bookdb-frontend
     restart: unless-stopped
     # No ports exposed - Cloudflare Tunnel will connect directly to the container
-    volumes:
-      # Using default Docker volume for nginx logs
-      - nginx_logs:/var/log/nginx
+    # No longer saving nginx logs to persistent volume
     depends_on:
       - backend
     networks:
@@ -133,8 +131,6 @@ volumes:
   postgres_archive:
     driver: local
   qdrant_data:
-    driver: local
-  nginx_logs:
     driver: local
 
 networks:
