@@ -50,7 +50,7 @@ services:
     networks:
       - backend-network
     healthcheck:
-      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health" ]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:8080/health" ]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -62,19 +62,28 @@ services:
     container_name: bookdb-postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - postgres_wal:/var/lib/postgresql/wal
+      - postgres_archive:/var/lib/postgresql/archive
       - ./postgres/init-minimal.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-bookdb}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bookdb_password}
       - POSTGRES_DB=${POSTGRES_DB:-bookdb}
-      # Increased WAL size and other tuning parameters to prevent frequent checkpoints
+      # Durability and checkpointing settings to improve data safety
       - POSTGRES_INITDB_ARGS=--data-checksums
       - POSTGRES_INITDB_WALDIR=/var/lib/postgresql/wal
       # PostgreSQL configuration parameters
       - POSTGRES_SHARED_BUFFERS=256MB
       - POSTGRES_MAX_WAL_SIZE=2GB
       - POSTGRES_MIN_WAL_SIZE=1GB
-      - POSTGRES_CHECKPOINT_TIMEOUT=15min
+      - POSTGRES_CHECKPOINT_TIMEOUT=10min
+      - POSTGRES_CHECKPOINT_COMPLETION_TARGET=0.9
+      - POSTGRES_SYNCHRONOUS_COMMIT=on
+      - POSTGRES_WAL_LEVEL=replica
+      - POSTGRES_MAX_WAL_SENDERS=3
+      - POSTGRES_ARCHIVE_MODE=on
+      - POSTGRES_ARCHIVE_COMMAND=cp %p /var/lib/postgresql/archive/%f
+      - POSTGRES_RESTORE_COMMAND=cp /var/lib/postgresql/archive/%f %p
     restart: unless-stopped
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bookdb}" ]
@@ -112,6 +121,10 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  postgres_wal:
+    driver: local
+  postgres_archive:
     driver: local
   qdrant_data:
     driver: local
