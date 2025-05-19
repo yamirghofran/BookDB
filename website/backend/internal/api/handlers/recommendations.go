@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strconv" // Added for string to int64 conversion
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +14,9 @@ import (
 	"github.com/qdrant/go-client/qdrant"
 	"github.com/yamirghofran/BookDB/internal/db" // Added for DB queries
 )
+
+// RecommendationService struct and existing helper functions (getEmbeddingByGoodreadsID, etc.) remain here...
+// ... (lines 16-206 from original file)
 
 type RecommendationService struct {
 	QdrantClient qdrant.Client
@@ -76,12 +81,6 @@ func querySimilarByVectorWithExclusion(
 ) ([]*qdrant.ScoredPoint, error) {
 	mustNotConditions := make([]*qdrant.Condition, 0, len(excludeIDs))
 	for _, id := range excludeIDs {
-		// Assuming 'goodreads_id' is a payload field we can filter on.
-		// If not, this filter won't work as intended for ID exclusion.
-		// The qdrant.NewHasIDCondition was not found, so trying with a field condition.
-		// This assumes the ID itself is stored as a filterable payload field.
-		// Based on rec_example.go, NewMatchInt seems to be the correct function.
-		// This assumes 'goodreads_id' is a payload field for filtering.
 		condition := qdrant.NewMatchInt("goodreads_id", id)
 		mustNotConditions = append(mustNotConditions, condition)
 	}
@@ -95,7 +94,7 @@ func querySimilarByVectorWithExclusion(
 		Query:          qdrant.NewQueryDense(vector),
 		Limit:          &limit,
 		Filter:         filter,
-		WithPayload:    qdrant.NewWithPayload(true), // Request payload to get GoodreadsID if stored there
+		WithPayload:    qdrant.NewWithPayload(true),
 	}
 
 	similarPoints, err := qdrantClient.Query(ctx, queryPoints)
@@ -116,26 +115,7 @@ func querySimilarUsersByVector(
 ) ([]*qdrant.ScoredPoint, error) {
 	var mustNotConditions []*qdrant.Condition
 	if excludeUserID != "" {
-		// Qdrant string IDs are typically not filterable via NewMatchInt.
-		// We need to filter on a payload field if the ID itself is stored there,
-		// or rely on the client to filter post-fetch if direct ID exclusion isn't easy.
-		// For now, assuming Qdrant point ID for users is the string UUID.
-		// The primary way to exclude specific point IDs is by NOT including them in a Get operation,
-		// or if the search operation itself has an `exclude: [PointId]` field.
-		// The current QueryPoints does not seem to have a direct `excludeIds` field.
-		// We will filter the results after fetching if excludeUserID matches.
-		// Alternatively, if user UUIDs are also stored as a filterable payload field (e.g., "user_uuid_payload"),
-		// we could use qdrant.NewMatchText("user_uuid_payload", excludeUserID).
-		// For simplicity, we'll fetch N+1 and filter in code if needed, or fetch N and hope the excluded one isn't top.
-		// A robust way is to ensure the point ID itself is filterable or use a payload field.
-		// Let's assume for now the `id` field in Qdrant for users is the string UUID and we can use a MatchText condition
-		// if we also store this UUID as a payload field named "user_id_payload" or similar.
-		// If not, this filter might not be effective.
-		// For "gmf_user_embeddings", the ID is a string like "00009ab2...".
-		// We'll assume there's a payload field "id_str" that stores this string ID for filtering.
-		// This is a common pattern if direct ID filtering in search is tricky.
-		// If "id_str" is not a payload field, this filter will not work.
-		condition := qdrant.NewMatchText("id_str", excludeUserID) // Corrected to NewMatchText
+		condition := qdrant.NewMatchText("id_str", excludeUserID)
 		mustNotConditions = append(mustNotConditions, condition)
 	}
 
@@ -149,7 +129,7 @@ func querySimilarUsersByVector(
 		Query:          qdrant.NewQueryDense(vector),
 		Limit:          &limit,
 		Filter:         filter,
-		WithPayload:    qdrant.NewWithPayload(true), // Request payload to get user UUID if stored there
+		WithPayload:    qdrant.NewWithPayload(true),
 	}
 
 	similarPoints, err := qdrantClient.Query(ctx, queryPoints)
@@ -169,7 +149,7 @@ func getAverageEmbeddingsAndFindSimilarWithExclusion(
 	limit uint64,
 ) ([]*qdrant.ScoredPoint, error) {
 	if len(goodreadsIDs) == 0 {
-		return []*qdrant.ScoredPoint{}, nil // Return empty if no IDs provided
+		return []*qdrant.ScoredPoint{}, nil
 	}
 
 	var allEmbeddings [][]float32
@@ -177,7 +157,7 @@ func getAverageEmbeddingsAndFindSimilarWithExclusion(
 		embedding, err := getEmbeddingByGoodreadsID(ctx, qdrantClient, gid, collectionName)
 		if err != nil {
 			fmt.Printf("Warning: could not get embedding for Goodreads ID %d: %v\n", gid, err)
-			continue // Skip if no embedding found for this point
+			continue
 		}
 		allEmbeddings = append(allEmbeddings, embedding)
 	}
@@ -205,6 +185,264 @@ func getAverageEmbeddingsAndFindSimilarWithExclusion(
 	return querySimilarByVectorWithExclusion(ctx, qdrantClient, collectionName, avgEmbedding, limit, goodreadsIDs)
 }
 
+// --- RERANKER LOGIC START ---
+
+const (
+	defaultLambdaParam                 = 0.7
+	defaultPubYearBoostFactor          = 0.01
+	defaultPubYearBoostBaseYear        = 2000
+	rerankerInitialCandidateMultiplier = 3 // Fetch N*X candidates initially for reranking to get N
+)
+
+// RerankerBookInfo holds processed metadata and scores for a book during reranking.
+type RerankerBookInfo struct {
+	GoodreadsID     int64
+	PublicationYear int32
+	Genres          []string
+	Authors         []string
+	Representation  map[string]struct{} // Combined set of unique genre and author strings
+	InitialScore    float32             // Score from Qdrant or other base model
+	AdjustedScore   float32             // Score after heuristic adjustments (e.g., pub year boost)
+}
+
+// newRerankerBookInfo creates a RerankerBookInfo object from database row and initial score.
+func newRerankerBookInfo(bookRow db.GetBooksByGoodreadsIDsRow, initialScore float32) RerankerBookInfo {
+	genres := processStringArrayInterface(bookRow.Genres)
+	authors := processStringArrayInterface(bookRow.Authors)
+
+	representation := make(map[string]struct{})
+	for _, g := range genres {
+		if g != "" {
+			representation[g] = struct{}{}
+		}
+	}
+	for _, a := range authors {
+		if a != "" {
+			representation[a] = struct{}{}
+		}
+	}
+
+	var pubYear int32
+	if bookRow.PublicationYear.Valid {
+		// pgtype.Int8 maps to int64 in Go, publication year should fit in int32
+		pubYear = int32(bookRow.PublicationYear.Int64)
+	}
+
+	return RerankerBookInfo{
+		GoodreadsID:     bookRow.GoodreadsID,
+		PublicationYear: pubYear,
+		Genres:          genres,
+		Authors:         authors,
+		Representation:  representation,
+		InitialScore:    initialScore,
+		AdjustedScore:   initialScore, // Will be adjusted later
+	}
+}
+
+// jaccardSimilarity calculates the Jaccard similarity between two sets of strings.
+func jaccardSimilarity(setA, setB map[string]struct{}) float64 {
+	intersectionSize := 0
+	unionSet := make(map[string]struct{})
+
+	for k := range setA {
+		unionSet[k] = struct{}{}
+		if _, exists := setB[k]; exists {
+			intersectionSize++
+		}
+	}
+	for k := range setB {
+		unionSet[k] = struct{}{}
+	}
+
+	unionSize := len(unionSet)
+
+	if unionSize == 0 { // Both sets were empty
+		return 0.0 // Or 1.0 if convention prefers, Python example implies 0 for problematic cases
+	}
+	return float64(intersectionSize) / float64(unionSize)
+}
+
+// mmrDiversify reranks candidates using Maximal Marginal Relevance.
+func mmrDiversify(
+	candidatesToRank []RerankerBookInfo, // Candidates with all necessary info including adjusted scores and representations
+	k int, // Target number of books to pick
+	lambdaParam float64, // Trade-off between relevance (score) vs. diversity
+) []int64 {
+	if len(candidatesToRank) == 0 || k <= 0 {
+		return []int64{}
+	}
+
+	// Ensure k is not greater than the number of candidates
+	if k > len(candidatesToRank) {
+		k = len(candidatesToRank)
+	}
+
+	selectedIDs := make([]int64, 0, k)
+	selectedRepresentations := make([]map[string]struct{}, 0, k) // Store representations of selected items
+
+	// Create a pool of candidates by their GoodreadsID for easy lookup and removal
+	pool := make(map[int64]RerankerBookInfo)
+	for _, c := range candidatesToRank {
+		pool[c.GoodreadsID] = c
+	}
+
+	// Pick the highest-scored book first
+	var firstCandidate RerankerBookInfo
+	firstCandidateFound := false
+	for _, candidate := range candidatesToRank {
+		if !firstCandidateFound || candidate.AdjustedScore > firstCandidate.AdjustedScore {
+			firstCandidate = candidate
+			firstCandidateFound = true
+		}
+	}
+
+	if !firstCandidateFound { // Should not happen if candidatesToRank is not empty
+		return []int64{}
+	}
+
+	selectedIDs = append(selectedIDs, firstCandidate.GoodreadsID)
+	selectedRepresentations = append(selectedRepresentations, firstCandidate.Representation)
+	delete(pool, firstCandidate.GoodreadsID)
+
+	// MMR loop
+	for len(selectedIDs) < k && len(pool) > 0 {
+		bestNextID := int64(-1)
+		maxMMRScore := -1.0 * math.MaxFloat64
+
+		for _, candidateInPool := range pool {
+			relevance := float64(candidateInPool.AdjustedScore)
+			maxSimToSelected := 0.0
+
+			if len(selectedRepresentations) > 0 { // Only calculate similarity if items have been selected
+				currentSimToSelected := 0.0
+				for _, selRep := range selectedRepresentations {
+					sim := jaccardSimilarity(candidateInPool.Representation, selRep)
+					if sim > currentSimToSelected {
+						currentSimToSelected = sim
+					}
+				}
+				maxSimToSelected = currentSimToSelected
+			}
+
+			mmrScore := lambdaParam*relevance - (1-lambdaParam)*maxSimToSelected
+
+			if mmrScore > maxMMRScore {
+				maxMMRScore = mmrScore
+				bestNextID = candidateInPool.GoodreadsID
+			}
+		}
+
+		if bestNextID != -1 {
+			selectedCandidateInfo := pool[bestNextID]
+			selectedIDs = append(selectedIDs, bestNextID)
+			selectedRepresentations = append(selectedRepresentations, selectedCandidateInfo.Representation)
+			delete(pool, bestNextID)
+		} else {
+			break // No suitable candidate found
+		}
+	}
+	return selectedIDs
+}
+
+// InitialCandidate holds basic info for a candidate before full reranking metadata is fetched.
+type InitialCandidate struct {
+	GoodreadsID int64
+	Score       float32
+}
+
+// applyRerankingLogic filters, adjusts scores, and diversifies candidates.
+func applyRerankingLogic(
+	ctx context.Context,
+	dbQueries *db.Queries,
+	initialRawCandidates []InitialCandidate,
+	userHistoryGoodreadsIDs map[int64]struct{}, // Books to exclude (e.g., user's library or input books)
+	finalK int, // Desired number of recommendations
+	lambdaParam float64,
+	pubYearBoostFactor float64,
+	pubYearBoostBaseYear int,
+) ([]int64, error) {
+	if len(initialRawCandidates) == 0 || finalK <= 0 {
+		return []int64{}, nil
+	}
+
+	// 1. Filter out user history and prepare for metadata fetching
+	candidateIDsToFetchMeta := make([]int64, 0, len(initialRawCandidates))
+	scoresMap := make(map[int64]float32) // Store initial scores by GoodreadsID
+
+	for _, ic := range initialRawCandidates {
+		if _, existsInHistory := userHistoryGoodreadsIDs[ic.GoodreadsID]; !existsInHistory {
+			candidateIDsToFetchMeta = append(candidateIDsToFetchMeta, ic.GoodreadsID)
+			scoresMap[ic.GoodreadsID] = ic.Score
+		}
+	}
+
+	if len(candidateIDsToFetchMeta) == 0 {
+		return []int64{}, nil
+	}
+
+	// 2. Fetch book metadata for filtered candidates
+	// Ensure unique IDs are passed to GetBooksByGoodreadsIDs if there's any chance of duplicates earlier
+	uniqueCandidateIDs := make([]int64, 0, len(candidateIDsToFetchMeta))
+	seenForMetaFetch := make(map[int64]struct{})
+	for _, id := range candidateIDsToFetchMeta {
+		if _, seen := seenForMetaFetch[id]; !seen {
+			uniqueCandidateIDs = append(uniqueCandidateIDs, id)
+			seenForMetaFetch[id] = struct{}{}
+		}
+	}
+
+	if len(uniqueCandidateIDs) == 0 {
+		return []int64{}, nil
+	}
+
+	dbBookRows, err := dbQueries.GetBooksByGoodreadsIDs(ctx, uniqueCandidateIDs)
+	if err != nil {
+		return nil, fmt.Errorf("applyRerankingLogic: failed to get book metadata: %w", err)
+	}
+
+	// 3. Create RerankerBookInfo, apply score adjustments (e.g., pub year boost)
+	rerankerCandidates := make([]RerankerBookInfo, 0, len(dbBookRows))
+	for _, bookRow := range dbBookRows {
+		initialScore, ok := scoresMap[bookRow.GoodreadsID]
+		if !ok {
+			// This book was in dbBookRows but not in our initial scoresMap after filtering.
+			// This might happen if a book from userHistory was also a candidate.
+			// Or if GetBooksByGoodreadsIDs returned a book not in uniqueCandidateIDs (should not happen).
+			// For safety, skip.
+			fmt.Printf("Warning: applyRerankingLogic - book %d metadata fetched but no initial score found after filtering. Skipping.\n", bookRow.GoodreadsID)
+			continue
+		}
+
+		info := newRerankerBookInfo(bookRow, initialScore)
+
+		// Apply publication year boost
+		if info.PublicationYear > 0 { // Ensure valid publication year
+			boost := float32(pubYearBoostFactor * float64(int(info.PublicationYear)-pubYearBoostBaseYear))
+			info.AdjustedScore += boost
+		}
+		rerankerCandidates = append(rerankerCandidates, info)
+	}
+
+	if len(rerankerCandidates) == 0 {
+		return []int64{}, nil
+	}
+
+	// Sort candidates by adjusted score descending before passing to MMR,
+	// as MMR's first pick relies on the highest score.
+	// While MMR itself finds the max, pre-sorting helps if the first pick logic is strict.
+	// The current mmrDiversify finds its own max, so this sort is for conceptual alignment / potential future use.
+	sort.SliceStable(rerankerCandidates, func(i, j int) bool {
+		return rerankerCandidates[i].AdjustedScore > rerankerCandidates[j].AdjustedScore
+	})
+
+	// 4. Diversify via MMR
+	rerankedIDs := mmrDiversify(rerankerCandidates, finalK, lambdaParam)
+
+	return rerankedIDs, nil
+}
+
+// --- RERANKER LOGIC END ---
+
 // GetAnonymousRecommendations returns book recommendations based on provided book UUIDs
 func (h *Handler) GetAnonymousRecommendations(c *gin.Context) {
 	var req struct {
@@ -223,7 +461,9 @@ func (h *Handler) GetAnonymousRecommendations(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	inputGoodreadsIDs := make([]int64, 0, len(req.LikedBookIds))
-	inputBookUUIDs := make([]pgtype.UUID, 0, len(req.LikedBookIds))
+	// inputBookUUIDs := make([]pgtype.UUID, 0, len(req.LikedBookIds)) // Not directly used after fetching GoodreadsIDs
+
+	userHistoryGoodreadsIDs := make(map[int64]struct{}) // For reranker exclusion
 
 	for _, idStr := range req.LikedBookIds {
 		bookUUID, err := uuid.Parse(idStr)
@@ -232,33 +472,73 @@ func (h *Handler) GetAnonymousRecommendations(c *gin.Context) {
 			return
 		}
 		pgUUID := pgtype.UUID{Bytes: bookUUID, Valid: true}
-		inputBookUUIDs = append(inputBookUUIDs, pgUUID)
+		// inputBookUUIDs = append(inputBookUUIDs, pgUUID) // Keep if needed elsewhere
 
-		// Fetch GoodreadsID for each book UUID
-		// Assuming GetBookByID returns a struct with GoodreadsID field.
-		// We need to fetch the book to get its GoodreadsID.
-		// A batch fetch might be more efficient if you have many LikedBookIds.
-		// For simplicity, fetching one by one here.
-		book, err := h.DB.GetBookByID(ctx, pgUUID) // GetBookByID returns db.GetBookByIDRow
+		book, err := h.DB.GetBookByID(ctx, pgUUID)
 		if err != nil {
 			fmt.Printf("Warning: Could not fetch book details for UUID %s: %v\n", idStr, err)
-			// Decide if this should be a hard error or just skip this book
 			continue
 		}
 		inputGoodreadsIDs = append(inputGoodreadsIDs, book.GoodreadsID)
+		userHistoryGoodreadsIDs[book.GoodreadsID] = struct{}{} // Add to history for exclusion
 	}
 
 	if len(inputGoodreadsIDs) == 0 {
-		c.JSON(http.StatusOK, []BookResponse{}) // Return empty if no valid Goodreads IDs found
+		c.JSON(http.StatusOK, []BookResponse{})
 		return
 	}
 
-	recommendationLimit := uint64(10) // Number of recommendations to return
+	recommendationTargetCount := 10 // Final number of recommendations to return
+	// Fetch more candidates for reranking
+	initialCandidateQueryLimit := uint64(recommendationTargetCount * rerankerInitialCandidateMultiplier)
 	qdrantCollection := "gmf_book_embeddings"
 
-	similarPoints, err := getAverageEmbeddingsAndFindSimilarWithExclusion(ctx, h.QdrantClient, inputGoodreadsIDs, qdrantCollection, recommendationLimit)
+	// Get average embedding of liked books (this part remains the same)
+	// Note: getAverageEmbeddingsAndFindSimilarWithExclusion already excludes inputGoodreadsIDs from Qdrant query
+	// However, the reranker needs the raw candidates *before* Qdrant's exclusion if we want to manage exclusion consistently.
+	// For simplicity with existing helpers, we'll let getAverageEmbeddingsAndFindSimilarWithExclusion do its exclusion,
+	// and the reranker will primarily handle diversity and recency boosts.
+	// The userHistoryGoodreadsIDs passed to reranker will ensure liked books are not re-recommended if they somehow pass Qdrant filter.
+
+	var avgEmbedding []float32
+	var err error
+	// Simplified averaging logic for clarity, assuming getAverageEmbeddingsAndFindSimilarWithExclusion internals
+	// This part is to get the avgEmbedding to query with.
+	if len(inputGoodreadsIDs) > 0 {
+		var allEmbeddings [][]float32
+		for _, gid := range inputGoodreadsIDs {
+			embedding, embErr := getEmbeddingByGoodreadsID(ctx, h.QdrantClient, gid, qdrantCollection)
+			if embErr != nil {
+				fmt.Printf("Warning: could not get embedding for Goodreads ID %d for averaging: %v\n", gid, embErr)
+				continue
+			}
+			allEmbeddings = append(allEmbeddings, embedding)
+		}
+		if len(allEmbeddings) > 0 {
+			embeddingDim := len(allEmbeddings[0])
+			avgEmbedding = make([]float32, embeddingDim)
+			for _, embedding := range allEmbeddings {
+				for i, val := range embedding {
+					avgEmbedding[i] += val
+				}
+			}
+			for i := range avgEmbedding {
+				avgEmbedding[i] /= float32(len(allEmbeddings))
+			}
+		} else {
+			fmt.Println("Warning: No embeddings found for liked books to calculate average.")
+			c.JSON(http.StatusOK, []BookResponse{})
+			return
+		}
+	} else {
+		c.JSON(http.StatusOK, []BookResponse{}) // Should have been caught earlier
+		return
+	}
+
+	// Query Qdrant for initial candidates, excluding liked books (as per querySimilarByVectorWithExclusion)
+	similarPoints, err := querySimilarByVectorWithExclusion(ctx, h.QdrantClient, qdrantCollection, avgEmbedding, initialCandidateQueryLimit, inputGoodreadsIDs)
 	if err != nil {
-		fmt.Printf("Error getting average embeddings and finding similar: %v\n", err)
+		fmt.Printf("Error finding similar points for anonymous recs: %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to calculate recommendations"})
 		return
 	}
@@ -268,56 +548,73 @@ func (h *Handler) GetAnonymousRecommendations(c *gin.Context) {
 		return
 	}
 
-	recommendedGoodreadsIDs := make([]int64, 0, len(similarPoints))
+	initialCandidatesForReranker := make([]InitialCandidate, 0, len(similarPoints))
 	for _, point := range similarPoints {
 		if point.Id != nil {
-			// Assuming point.Id.GetNum() gives the Goodreads ID (uint64)
-			recommendedGoodreadsIDs = append(recommendedGoodreadsIDs, int64(point.Id.GetNum()))
-		} else if point.Payload != nil {
-			// Fallback: if GoodreadsID is in payload (e.g. as "goodreads_id" or "book_id")
-			// This depends on how Qdrant points are structured.
-			// For rec_example.go, ID itself is the Goodreads ID.
-			// Example: if payload has "goodreads_id": val,
-			// if goidVal, ok := point.Payload["goodreads_id"]; ok {
-			// if goid, ok := goidVal.GetIntegerValue(); ok {
-			// recommendedGoodreadsIDs = append(recommendedGoodreadsIDs, goid)
-			// }
-			// }
+			gid := int64(point.Id.GetNum())
+			// Double check exclusion, though querySimilarByVectorWithExclusion should handle it
+			if _, existsInLiked := userHistoryGoodreadsIDs[gid]; !existsInLiked {
+				initialCandidatesForReranker = append(initialCandidatesForReranker, InitialCandidate{
+					GoodreadsID: gid,
+					Score:       point.Score,
+				})
+			}
 		}
 	}
 
-	// Filter out any of the original inputGoodreadsIDs from the recommendations
-	finalRecommendedGoodreadsIDs := make([]int64, 0, len(recommendedGoodreadsIDs))
-	inputIDSet := make(map[int64]struct{})
-	for _, id := range inputGoodreadsIDs {
-		inputIDSet[id] = struct{}{}
-	}
-	for _, recID := range recommendedGoodreadsIDs {
-		if _, exists := inputIDSet[recID]; !exists {
-			finalRecommendedGoodreadsIDs = append(finalRecommendedGoodreadsIDs, recID)
-		}
-	}
-	recommendedGoodreadsIDs = finalRecommendedGoodreadsIDs // Update with filtered list
-
-	if len(recommendedGoodreadsIDs) == 0 {
+	if len(initialCandidatesForReranker) == 0 {
 		c.JSON(http.StatusOK, []BookResponse{})
 		return
 	}
 
-	// Fetch full book details for the recommended Goodreads IDs
-	dbBooks, err := h.DB.GetBooksByGoodreadsIDs(ctx, recommendedGoodreadsIDs)
+	// Apply reranking logic
+	rerankedGoodreadsIDs, err := applyRerankingLogic(
+		ctx,
+		h.DB,
+		initialCandidatesForReranker,
+		userHistoryGoodreadsIDs, // Liked books are the history here
+		recommendationTargetCount,
+		defaultLambdaParam,
+		defaultPubYearBoostFactor,
+		defaultPubYearBoostBaseYear,
+	)
 	if err != nil {
-		fmt.Printf("Error fetching recommended book details from DB: %v\n", err)
+		fmt.Printf("Error applying reranking logic for anonymous recs: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to rerank recommendations"})
+		return
+	}
+
+	if len(rerankedGoodreadsIDs) == 0 {
+		c.JSON(http.StatusOK, []BookResponse{})
+		return
+	}
+
+	// Fetch full book details for the reranked Goodreads IDs
+	dbBooks, err := h.DB.GetBooksByGoodreadsIDs(ctx, rerankedGoodreadsIDs)
+	if err != nil {
+		fmt.Printf("Error fetching reranked recommended book details from DB: %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch recommended book details"})
 		return
 	}
 
-	responseBooks := make([]BookResponse, 0, len(dbBooks))
-	seenTitles := make(map[string]struct{}) // To track unique titles
+	// Order dbBooks according to rerankedGoodreadsIDs
+	orderedDbBooks := make([]db.GetBooksByGoodreadsIDsRow, 0, len(dbBooks))
+	bookMap := make(map[int64]db.GetBooksByGoodreadsIDsRow)
+	for _, b := range dbBooks {
+		bookMap[b.GoodreadsID] = b
+	}
+	for _, id := range rerankedGoodreadsIDs {
+		if book, ok := bookMap[id]; ok {
+			orderedDbBooks = append(orderedDbBooks, book)
+		}
+	}
 
-	for _, bookRow := range dbBooks {
+	responseBooks := make([]BookResponse, 0, len(orderedDbBooks))
+	seenTitles := make(map[string]struct{})
+
+	for _, bookRow := range orderedDbBooks { // Use orderedDbBooks
 		if _, exists := seenTitles[bookRow.Title]; exists {
-			continue // Skip if title already processed
+			continue
 		}
 		seenTitles[bookRow.Title] = struct{}{}
 
@@ -341,11 +638,10 @@ func (h *Handler) GetAnonymousRecommendations(c *gin.Context) {
 			CoverImageUrl:   bookRow.CoverImageUrl,
 			AverageRating:   apiAvgRating,
 			RatingsCount:    bookRow.RatingsCount,
-			Authors:         processStringArrayInterface(bookRow.Authors), // from basic.go
-			Genres:          processStringArrayInterface(bookRow.Genres),  // from basic.go
+			Authors:         processStringArrayInterface(bookRow.Authors),
+			Genres:          processStringArrayInterface(bookRow.Genres),
 			CreatedAt:       bookRow.CreatedAt,
 			UpdatedAt:       bookRow.UpdatedAt,
-			// Reviews and ReviewsTotalCount are not typically part of a recommendation list item
 		})
 	}
 
@@ -374,8 +670,6 @@ func (h *Handler) GetContentBasedRecommendations(c *gin.Context) { // Changed re
 	sourceGoodreadsID := sourceBook.GoodreadsID
 
 	// 2. Get the embedding for the source book's Goodreads ID
-	// Using "gmf_book_embeddings" as per rec_example for averaging, implies it's a good general purpose embedding.
-	// Or use "sbert_embeddings" if that's preferred for content similarity. Let's use "gmf_book_embeddings" for consistency.
 	qdrantCollection := "gmf_book_embeddings" // Or "sbert_embeddings"
 	sourceEmbedding, err := getEmbeddingByGoodreadsID(ctx, h.QdrantClient, sourceGoodreadsID, qdrantCollection)
 	if err != nil {
@@ -385,8 +679,12 @@ func (h *Handler) GetContentBasedRecommendations(c *gin.Context) { // Changed re
 	}
 
 	// 3. Query Qdrant for similar books, excluding the source book itself
-	recommendationLimit := uint64(10)
-	similarPoints, err := querySimilarByVectorWithExclusion(ctx, h.QdrantClient, qdrantCollection, sourceEmbedding, recommendationLimit, []int64{sourceGoodreadsID})
+	recommendationTargetCount := 10
+	initialCandidateQueryLimit := uint64(recommendationTargetCount * rerankerInitialCandidateMultiplier)
+
+	userHistoryGoodreadsIDs := map[int64]struct{}{sourceGoodreadsID: {}} // Exclude the source book
+
+	similarPoints, err := querySimilarByVectorWithExclusion(ctx, h.QdrantClient, qdrantCollection, sourceEmbedding, initialCandidateQueryLimit, []int64{sourceGoodreadsID})
 	if err != nil {
 		fmt.Printf("Error querying Qdrant for similar books to %d: %v\n", sourceGoodreadsID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to find similar books"})
@@ -398,41 +696,71 @@ func (h *Handler) GetContentBasedRecommendations(c *gin.Context) { // Changed re
 		return
 	}
 
-	recommendedGoodreadsIDs := make([]int64, 0, len(similarPoints))
+	initialCandidatesForReranker := make([]InitialCandidate, 0, len(similarPoints))
 	for _, point := range similarPoints {
 		if point.Id != nil {
-			recommendedGoodreadsIDs = append(recommendedGoodreadsIDs, int64(point.Id.GetNum()))
+			gid := int64(point.Id.GetNum())
+			if gid != sourceGoodreadsID { // Ensure source book is not included
+				initialCandidatesForReranker = append(initialCandidatesForReranker, InitialCandidate{
+					GoodreadsID: gid,
+					Score:       point.Score,
+				})
+			}
 		}
 	}
 
-	// Filter out the sourceGoodreadsID from the recommendations, if present
-	finalRecommendedGoodreadsIDsCB := make([]int64, 0, len(recommendedGoodreadsIDs))
-	for _, recID := range recommendedGoodreadsIDs {
-		if recID != sourceGoodreadsID {
-			finalRecommendedGoodreadsIDsCB = append(finalRecommendedGoodreadsIDsCB, recID)
-		}
-	}
-	recommendedGoodreadsIDs = finalRecommendedGoodreadsIDsCB // Update with filtered list
-
-	if len(recommendedGoodreadsIDs) == 0 {
+	if len(initialCandidatesForReranker) == 0 {
 		c.JSON(http.StatusOK, []BookResponse{})
 		return
 	}
 
-	// 4. Fetch full book details for the recommended Goodreads IDs
-	dbBooks, err := h.DB.GetBooksByGoodreadsIDs(ctx, recommendedGoodreadsIDs)
+	rerankedGoodreadsIDs, err := applyRerankingLogic(
+		ctx,
+		h.DB,
+		initialCandidatesForReranker,
+		userHistoryGoodreadsIDs, // Source book is the history
+		recommendationTargetCount,
+		defaultLambdaParam,
+		defaultPubYearBoostFactor,
+		defaultPubYearBoostBaseYear,
+	)
+	if err != nil {
+		fmt.Printf("Error applying reranking logic for content-based recs: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to rerank recommendations"})
+		return
+	}
+
+	if len(rerankedGoodreadsIDs) == 0 {
+		c.JSON(http.StatusOK, []BookResponse{})
+		return
+	}
+
+	// 4. Fetch full book details for the reranked Goodreads IDs
+	dbBooks, err := h.DB.GetBooksByGoodreadsIDs(ctx, rerankedGoodreadsIDs)
 	if err != nil {
 		fmt.Printf("Error fetching recommended book details from DB: %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch recommended book details"})
 		return
 	}
 
-	responseBooks := make([]BookResponse, 0, len(dbBooks))
-	seenTitles := make(map[string]struct{}) // To track unique titles
+	// Order dbBooks according to rerankedGoodreadsIDs
+	orderedDbBooks := make([]db.GetBooksByGoodreadsIDsRow, 0, len(dbBooks))
+	bookMap := make(map[int64]db.GetBooksByGoodreadsIDsRow)
+	for _, b := range dbBooks {
+		bookMap[b.GoodreadsID] = b
+	}
+	for _, id := range rerankedGoodreadsIDs {
+		if book, ok := bookMap[id]; ok {
+			orderedDbBooks = append(orderedDbBooks, book)
+		}
+	}
 
-	for _, bookRow := range dbBooks {
+	responseBooks := make([]BookResponse, 0, len(orderedDbBooks))
+	seenTitles := make(map[string]struct{})
+
+	for _, bookRow := range orderedDbBooks {
 		if _, exists := seenTitles[bookRow.Title]; exists {
-			continue // Skip if title already processed
+			continue
 		}
 		seenTitles[bookRow.Title] = struct{}{}
 
@@ -466,13 +794,15 @@ func (h *Handler) GetContentBasedRecommendations(c *gin.Context) { // Changed re
 
 // GetCollaborativeRecommendations returns collaborative filtering recommendations for a user
 // (Existing function - can be kept as is or adapted)
+// For now, this function is NOT MODIFIED to use the new reranker.
+// It would require similar changes to GetBookRecommendationsForUser if it were to be fully fledged.
 func (rs *RecommendationService) GetCollaborativeRecommendations(c *gin.Context) {
-	userID := c.Param("userId") // Assuming this is the string representation of the user's Qdrant ID
+	userID := c.Param("userId")
 
 	userPoints, err := rs.QdrantClient.Get(context.Background(), &qdrant.GetPoints{
-		CollectionName: "gmf_user_embeddings", // User embeddings collection
+		CollectionName: "gmf_user_embeddings",
 		Ids: []*qdrant.PointId{
-			qdrant.NewID(userID), // User IDs in Qdrant are strings
+			qdrant.NewID(userID),
 		},
 		WithVectors: qdrant.NewWithVectors(true),
 	})
@@ -494,12 +824,10 @@ func (rs *RecommendationService) GetCollaborativeRecommendations(c *gin.Context)
 	userVector := userPoints[0].Vectors.GetVector().Data
 
 	limit := uint64(10)
-	// Find similar books based on user embedding from gmf_book_embeddings
 	similarBookPoints, err := rs.QdrantClient.Query(context.Background(), &qdrant.QueryPoints{
-		CollectionName: "gmf_book_embeddings", // Book embeddings for collaborative filtering
+		CollectionName: "gmf_book_embeddings",
 		Query:          qdrant.NewQueryDense(userVector),
 		Limit:          &limit,
-		// Potentially add a filter here if user has already interacted with some books
 	})
 
 	if err != nil {
@@ -507,29 +835,23 @@ func (rs *RecommendationService) GetCollaborativeRecommendations(c *gin.Context)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve book recommendations"})
 		return
 	}
-
-	// Similar to GetContentBasedRecommendations, map these points to BookResponse
-	// For brevity, returning raw points.
-	c.JSON(http.StatusOK, similarBookPoints) // Placeholder: ideally return []BookResponse
+	c.JSON(http.StatusOK, similarBookPoints)
 }
 
 // GetSimilarUsers finds users with similar taste to a given user.
+// (Existing function - NOT MODIFIED)
 func (h *Handler) GetSimilarUsers(c *gin.Context) {
-	userID := c.Param("id") // This is the string UUID from the path
+	userID := c.Param("id")
 	ctx := c.Request.Context()
 	qdrantUserCollection := "gmf_user_embeddings"
 	recommendationLimit := uint64(10)
 
-	// 1. Get the source user's embedding
 	sourceUserEmbedding, err := getEmbeddingByUserID(ctx, h.QdrantClient, userID, qdrantUserCollection)
 	if err != nil {
 		fmt.Printf("Error getting embedding for source user ID %s: %v\n", userID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not retrieve embedding for source user"})
 		return
 	}
-
-	// 2. Query Qdrant for similar user vectors, excluding the source user itself.
-	// Assumes user points in Qdrant have a payload field "id_str" storing the string UUID for filtering.
 	similarUserPoints, err := querySimilarUsersByVector(ctx, h.QdrantClient, qdrantUserCollection, sourceUserEmbedding, recommendationLimit, userID)
 	if err != nil {
 		fmt.Printf("Error querying Qdrant for similar users to %s: %v\n", userID, err)
@@ -538,29 +860,23 @@ func (h *Handler) GetSimilarUsers(c *gin.Context) {
 	}
 
 	if len(similarUserPoints) == 0 {
-		c.JSON(http.StatusOK, []db.User{}) // Return empty list of users
+		c.JSON(http.StatusOK, []db.User{})
 		return
 	}
-
-	// 3. Extract similar user UUIDs from Qdrant points
 	similarUserUUIDStrings := make([]string, 0, len(similarUserPoints))
 	for _, point := range similarUserPoints {
 		if point.Id != nil {
-			// Qdrant user IDs are strings (UUIDs). Access via GetUuid()
 			userQdrantID := point.Id.GetUuid()
-			if userQdrantID != userID { // Ensure the source user is not included
+			if userQdrantID != userID {
 				similarUserUUIDStrings = append(similarUserUUIDStrings, userQdrantID)
 			}
 		}
-		// Add fallback for payload if needed
 	}
 
 	if len(similarUserUUIDStrings) == 0 {
 		c.JSON(http.StatusOK, []db.User{})
 		return
 	}
-
-	// 4. Fetch full user details for these UUIDs from PostgreSQL
 	responseUsers := make([]db.User, 0, len(similarUserUUIDStrings))
 	for _, uuidStr := range similarUserUUIDStrings {
 		pgUUID, err := uuid.Parse(uuidStr)
@@ -570,14 +886,13 @@ func (h *Handler) GetSimilarUsers(c *gin.Context) {
 		}
 		dbUserRow, err := h.DB.GetUserByID(ctx, pgtype.UUID{Bytes: pgUUID, Valid: true})
 		if err != nil {
-			// Log error but continue, so if one user fetch fails, others might still succeed.
 			fmt.Printf("Warning: Could not fetch user details for UUID %s from DB: %v\n", uuidStr, err)
 			continue
 		}
 		responseUsers = append(responseUsers, db.User{
 			ID:        dbUserRow.ID,
 			Name:      dbUserRow.Name,
-			Email:     dbUserRow.Email, // Consider if email should be exposed here
+			Email:     dbUserRow.Email,
 			CreatedAt: dbUserRow.CreatedAt,
 			UpdatedAt: dbUserRow.UpdatedAt,
 		})
@@ -586,19 +901,22 @@ func (h *Handler) GetSimilarUsers(c *gin.Context) {
 }
 
 // GetBookRecommendationsForUser recommends books for a given user using a hybrid approach.
+// MODIFIED to use the new reranker logic.
 func (h *Handler) GetBookRecommendationsForUser(c *gin.Context) {
-	userID := c.Param("id") // This is the string UUID from the path
+	userID := c.Param("id")
 	ctx := c.Request.Context()
 
 	qdrantUserCollection := "gmf_user_embeddings"
 	qdrantGmfBookCollection := "gmf_book_embeddings"
-	qdrantSbertBookCollection := "sbert_embeddings" // As per new requirement
+	qdrantSbertBookCollection := "sbert_embeddings"
 
-	limitPerSource := uint64(5) // Target 5 recommendations from each source
-	// Fetch more initially to account for filtering and overlap
-	initialQueryLimit := limitPerSource * 2
+	recommendationTargetCount := 10 // Final total recommendations
+	// For hybrid, let's aim for roughly half from each source before reranking, then rerank combined pool
+	limitPerSourceBeforeRerank := recommendationTargetCount * rerankerInitialCandidateMultiplier / 2
+	if limitPerSourceBeforeRerank < recommendationTargetCount { // ensure enough candidates if target is small
+		limitPerSourceBeforeRerank = recommendationTargetCount
+	}
 
-	// --- Fetch user's current library (Goodreads IDs) ---
 	pgUserID, err := uuid.Parse(userID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID format for DB query"})
@@ -606,35 +924,35 @@ func (h *Handler) GetBookRecommendationsForUser(c *gin.Context) {
 	}
 	userLibraryDBRows, err := h.DB.GetUserLibraryDetails(ctx, pgtype.UUID{Bytes: pgUserID, Valid: true})
 	if err != nil {
-		// Log error but proceed; recommendations might be less personalized if library is missing
 		fmt.Printf("Warning: Error fetching library for user %s: %v. Proceeding without full library exclusion for GMF part.\n", userID, err)
 	}
 	libraryGoodreadsIDs := make([]int64, 0, len(userLibraryDBRows))
-	libraryIDSet := make(map[int64]struct{})
+	userHistoryGoodreadsIDs := make(map[int64]struct{}) // For reranker
 	for _, libBookRow := range userLibraryDBRows {
 		libraryGoodreadsIDs = append(libraryGoodreadsIDs, libBookRow.GoodreadsID)
-		libraryIDSet[libBookRow.GoodreadsID] = struct{}{}
+		userHistoryGoodreadsIDs[libBookRow.GoodreadsID] = struct{}{}
 	}
 
-	var gmfRecsGoodreadsIDs []int64
-	var sbertRecsGoodreadsIDs []int64
-	// finalRecommendedGoodreadsIDsMap := make(map[int64]struct{}) // Removed unused variable
+	allInitialCandidates := make([]InitialCandidate, 0)
+	seenCandidateGIDs := make(map[int64]struct{}) // To avoid duplicate candidates from different sources
 
 	// --- Part 1: GMF-based Recommendations (Collaborative Style) ---
 	userEmbedding, err := getEmbeddingByUserID(ctx, h.QdrantClient, userID, qdrantUserCollection)
 	if err != nil {
 		fmt.Printf("Error getting GMF user embedding for user ID %s: %v\n", userID, err)
-		// Don't fail outright, SBERT part might still work
 	} else {
-		gmfSimilarBookPoints, err := querySimilarByVectorWithExclusion(ctx, h.QdrantClient, qdrantGmfBookCollection, userEmbedding, initialQueryLimit, libraryGoodreadsIDs)
+		gmfSimilarBookPoints, err := querySimilarByVectorWithExclusion(ctx, h.QdrantClient, qdrantGmfBookCollection, userEmbedding, uint64(limitPerSourceBeforeRerank), libraryGoodreadsIDs)
 		if err != nil {
 			fmt.Printf("Error querying GMF book recommendations for user %s: %v\n", userID, err)
 		} else {
 			for _, point := range gmfSimilarBookPoints {
 				if point.Id != nil {
 					gid := int64(point.Id.GetNum())
-					if _, existsInLibrary := libraryIDSet[gid]; !existsInLibrary {
-						gmfRecsGoodreadsIDs = append(gmfRecsGoodreadsIDs, gid)
+					if _, existsInLibrary := userHistoryGoodreadsIDs[gid]; !existsInLibrary {
+						if _, seen := seenCandidateGIDs[gid]; !seen {
+							allInitialCandidates = append(allInitialCandidates, InitialCandidate{GoodreadsID: gid, Score: point.Score})
+							seenCandidateGIDs[gid] = struct{}{}
+						}
 					}
 				}
 			}
@@ -643,79 +961,79 @@ func (h *Handler) GetBookRecommendationsForUser(c *gin.Context) {
 
 	// --- Part 2: SBERT-based Recommendations (Content from Library Average) ---
 	if len(libraryGoodreadsIDs) > 0 {
-		sbertSimilarBookPoints, err := getAverageEmbeddingsAndFindSimilarWithExclusion(ctx, h.QdrantClient, libraryGoodreadsIDs, qdrantSbertBookCollection, initialQueryLimit)
+		// getAverageEmbeddingsAndFindSimilarWithExclusion already excludes libraryGoodreadsIDs
+		sbertSimilarBookPoints, err := getAverageEmbeddingsAndFindSimilarWithExclusion(ctx, h.QdrantClient, libraryGoodreadsIDs, qdrantSbertBookCollection, uint64(limitPerSourceBeforeRerank))
 		if err != nil {
 			fmt.Printf("Error getting SBERT recommendations based on library average for user %s: %v\n", userID, err)
 		} else {
 			for _, point := range sbertSimilarBookPoints {
 				if point.Id != nil {
 					gid := int64(point.Id.GetNum())
-					// getAverageEmbeddingsAndFindSimilarWithExclusion already excludes libraryGoodreadsIDs via its call to querySimilarByVectorWithExclusion
-					sbertRecsGoodreadsIDs = append(sbertRecsGoodreadsIDs, gid)
+					// querySimilarByVectorWithExclusion (called by getAverage...) already handles library exclusion
+					if _, existsInLibrary := userHistoryGoodreadsIDs[gid]; !existsInLibrary { // Double check
+						if _, seen := seenCandidateGIDs[gid]; !seen {
+							allInitialCandidates = append(allInitialCandidates, InitialCandidate{GoodreadsID: gid, Score: point.Score})
+							seenCandidateGIDs[gid] = struct{}{}
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// --- Combine and select top N from each, ensuring uniqueness and desired order ---
-	// SBERT recommendations first, then GMF.
-
-	var orderedFinalGoodreadsIDs []int64
-	// tempFinalRecommendedGoodreadsIDsMap was the variable name from the previous attempt,
-	// let's use tempCombinedRecsMap for clarity as it's for combining.
-	tempCombinedRecsMap := make(map[int64]struct{}) // Used to track uniqueness while building the ordered list
-
-	// Add SBERT recommendations first
-	sbertCollectedCount := 0
-	for _, gid := range sbertRecsGoodreadsIDs {
-		if sbertCollectedCount >= int(limitPerSource) { // Max 5 from SBERT
-			break
-		}
-		// Ensure it's not in the library AND not already added to our combined list
-		if _, existsInLibrary := libraryIDSet[gid]; !existsInLibrary {
-			if _, alreadyAdded := tempCombinedRecsMap[gid]; !alreadyAdded {
-				orderedFinalGoodreadsIDs = append(orderedFinalGoodreadsIDs, gid)
-				tempCombinedRecsMap[gid] = struct{}{}
-				sbertCollectedCount++
-			}
-		}
+	if len(allInitialCandidates) == 0 {
+		c.JSON(http.StatusOK, []BookResponse{})
+		return
 	}
 
-	// Then add GMF recommendations
-	gmfCollectedCount := 0
-	for _, gid := range gmfRecsGoodreadsIDs {
-		if gmfCollectedCount >= int(limitPerSource) { // Max 5 from GMF
-			break
-		}
-		// Ensure it's not in the library AND not already added to our combined list
-		if _, existsInLibrary := libraryIDSet[gid]; !existsInLibrary {
-			if _, alreadyAdded := tempCombinedRecsMap[gid]; !alreadyAdded {
-				orderedFinalGoodreadsIDs = append(orderedFinalGoodreadsIDs, gid)
-				tempCombinedRecsMap[gid] = struct{}{}
-				gmfCollectedCount++
-			}
-		}
+	// --- Apply Reranking Logic to the combined list ---
+	rerankedGoodreadsIDs, err := applyRerankingLogic(
+		ctx,
+		h.DB,
+		allInitialCandidates,
+		userHistoryGoodreadsIDs,   // User's library
+		recommendationTargetCount, // Final desired count
+		defaultLambdaParam,
+		defaultPubYearBoostFactor,
+		defaultPubYearBoostBaseYear,
+	)
+	if err != nil {
+		fmt.Printf("Error applying reranking logic for user %s: %v\n", userID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to rerank recommendations"})
+		return
 	}
 
-	if len(orderedFinalGoodreadsIDs) == 0 {
+	if len(rerankedGoodreadsIDs) == 0 {
 		c.JSON(http.StatusOK, []BookResponse{})
 		return
 	}
 
 	// --- Fetch full book details ---
-	dbBooks, err := h.DB.GetBooksByGoodreadsIDs(ctx, orderedFinalGoodreadsIDs)
+	dbBooks, err := h.DB.GetBooksByGoodreadsIDs(ctx, rerankedGoodreadsIDs)
 	if err != nil {
 		fmt.Printf("Error fetching combined recommended book details from DB for user %s: %v\n", userID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch recommended book details"})
 		return
 	}
 
-	responseBooks := make([]BookResponse, 0, len(dbBooks))
-	seenTitles := make(map[string]struct{}) // To track unique titles
+	// Order dbBooks according to rerankedGoodreadsIDs
+	orderedDbBooks := make([]db.GetBooksByGoodreadsIDsRow, 0, len(dbBooks))
+	bookMap := make(map[int64]db.GetBooksByGoodreadsIDsRow)
+	for _, b := range dbBooks {
+		bookMap[b.GoodreadsID] = b
+	}
+	for _, id := range rerankedGoodreadsIDs {
+		if book, ok := bookMap[id]; ok {
+			orderedDbBooks = append(orderedDbBooks, book)
+		}
+	}
 
-	for _, bookRow := range dbBooks {
+	responseBooks := make([]BookResponse, 0, len(orderedDbBooks))
+	seenTitles := make(map[string]struct{})
+
+	for _, bookRow := range orderedDbBooks {
 		if _, exists := seenTitles[bookRow.Title]; exists {
-			continue // Skip if title already processed
+			continue
 		}
 		seenTitles[bookRow.Title] = struct{}{}
 
@@ -746,24 +1064,11 @@ func (h *Handler) GetBookRecommendationsForUser(c *gin.Context) {
 }
 
 // GetHybridRecommendations combines both content-based and collaborative filtering recommendations
-// (Existing function - can be reviewed or adapted)
+// (Existing function - NOT MODIFIED, placeholder)
 func (rs *RecommendationService) GetHybridRecommendations(c *gin.Context) {
-	// This function would typically involve:
-	// 1. Getting content-based recommendations (e.g., for a specific book).
-	// 2. Getting collaborative filtering recommendations (e.g., for the user).
-	// 3. Combining and re-ranking these lists.
-	// The current implementation fetches embeddings and recs but doesn't show a clear combination strategy.
-	// For a true hybrid, you'd fetch two lists of BookResponse and then merge/re-rank.
+	bookIDStr := c.Param("bookId")
+	userID := c.Param("userId")
 
-	// For now, let's assume the logic needs more refinement for a proper hybrid response.
-	// The existing code fetches raw Qdrant points.
-	bookIDStr := c.Param("bookId") // e.g., Goodreads ID for content-based anchor
-	userID := c.Param("userId")    // User ID for collaborative part
-
-	// ... (logic to get contentBasedRecs as []*qdrant.ScoredPoint) ...
-	// ... (logic to get collaborativeRecs as []*qdrant.ScoredPoint) ...
-
-	// Example: Fetching content-based (assuming bookIDStr is Goodreads ID)
 	bookGID, err := strconv.ParseInt(bookIDStr, 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid book ID for content part"})
@@ -771,12 +1076,11 @@ func (rs *RecommendationService) GetHybridRecommendations(c *gin.Context) {
 	}
 	contentLimit := uint64(5)
 	contentBasedRecs, _ := rs.QdrantClient.Query(context.Background(), &qdrant.QueryPoints{
-		CollectionName: "sbert_embeddings", // Or gmf_book_embeddings
+		CollectionName: "sbert_embeddings",
 		Query:          qdrant.NewQueryID(qdrant.NewIDNum(uint64(bookGID))),
 		Limit:          &contentLimit,
 	})
 
-	// Example: Fetching collaborative
 	userPoints, err := rs.QdrantClient.Get(context.Background(), &qdrant.GetPoints{
 		CollectionName: "gmf_user_embeddings",
 		Ids:            []*qdrant.PointId{qdrant.NewID(userID)},
@@ -791,13 +1095,9 @@ func (rs *RecommendationService) GetHybridRecommendations(c *gin.Context) {
 			Limit:          &collabLimit,
 		})
 	}
-
-	// Actual combination logic is non-trivial (re-ranking, ensuring diversity, etc.)
-	// For now, just returning them separately as the original code did.
 	response := gin.H{
-		"content_based_raw": contentBasedRecs,  // Ideally map to []BookResponse
-		"collaborative_raw": collaborativeRecs, // Ideally map to []BookResponse
+		"content_based_raw": contentBasedRecs,
+		"collaborative_raw": collaborativeRecs,
 	}
-
 	c.JSON(http.StatusOK, response)
 }
