@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   # Frontend service with nginx
-  frontend:
+  frontend-dev:
     build:
       context: ./website/frontend
       dockerfile: Dockerfile
@@ -10,24 +8,24 @@ services:
     ports:
       - "80:80" # Main application on standard HTTP port
     volumes:
-      # Mount nginx.conf for live reloading
-      - ./website/frontend/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Mount nginx.conf as template for environment substitution
+      - ./website/frontend/nginx.conf:/etc/nginx/nginx.template:ro
       # Mount frontend source code for live reloading
       - ./website/frontend/src:/usr/share/nginx/html/src:ro
       - ./website/frontend/public:/usr/share/nginx/html/public:ro
     restart: unless-stopped
     depends_on:
-      - bookdb-backend-dev
-      - bookdb-qdrant-dev
+      - backend-dev
+      - qdrant-dev
     networks:
       - app_network
     environment:
       - BACKEND_SERVICE=bookdb-backend-dev
       - QDRANT_SERVICE=bookdb-qdrant-dev
       - VIRTUAL_HOST=localhost
-
+      - APP_ENV=development
   # Backend Go service
-  bookdb-backend-dev:
+  backend-dev:
     build:
       context: ./website/backend
       dockerfile: Dockerfile
@@ -56,8 +54,8 @@ services:
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
     depends_on:
-      - bookdb-postgres-dev
-      - bookdb-qdrant-dev
+      - postgres-dev
+      - qdrant-dev
     networks:
       - app_network
     healthcheck:
@@ -68,7 +66,7 @@ services:
       start_period: 5s
 
   # PostgreSQL database for development
-  bookdb-postgres-dev:
+  postgres-dev:
     image: postgres:16-alpine
     container_name: bookdb-postgres-dev
     ports:
@@ -92,7 +90,7 @@ services:
       retries: 3
 
   # Qdrant vector database
-  bookdb-qdrant-dev:
+  qdrant-dev:
     image: qdrant/qdrant:latest
     container_name: bookdb-qdrant-dev
     ports:

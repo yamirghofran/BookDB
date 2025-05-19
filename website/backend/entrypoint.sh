@@ -8,7 +8,7 @@ until PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NA
 done
 echo "PostgreSQL is up - proceeding with setup"
 
-# Check if database tables already exist FIRST before downloading anything
+# Check if database tables already exist FIRST before doing anything else
 echo "Checking if database tables already exist..."
 TABLES_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
 
@@ -19,103 +19,80 @@ if [ "$TABLES_COUNT" -gt 0 ]; then
   BOOKS_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
   
   if [ "$BOOKS_COUNT" -gt 0 ]; then
-    echo "Found $BOOKS_COUNT books in the database. Database is already populated, skipping R2 download and import."
+    echo "Found $BOOKS_COUNT books in the database. Database is already populated, skipping migrations and data import."
     SKIP_MIGRATIONS=true
-    R2_IMPORT_SUCCESS=false
+    SKIP_PGDUMP_DOWNLOAD=true
   else
-    echo "Tables exist but no data found. Will check R2 for data import."
+    echo "Tables exist but no data found. Will apply pgdump for data import only."
     SKIP_MIGRATIONS=true
-    
-    # Debug log environment variables
-    echo "Debug: Environment Variables"
-    echo "R2_ENDPOINT_URL: '${R2_ENDPOINT_URL}'"
-    echo "R2_BUCKET_NAME: '${R2_BUCKET_NAME}'"
-    echo "R2_OBJECT_KEY: '${R2_OBJECT_KEY}'"
-    
-    # Configure AWS CLI for Cloudflare R2
-    mkdir -p ~/.aws
-    echo "[default]
-aws_access_key_id=$R2_ACCESS_KEY_ID
-aws_secret_access_key=$R2_SECRET_ACCESS_KEY
-" > ~/.aws/credentials
-    
-    # Check and fix R2 endpoint URL if needed
-    if [ -z "$R2_ENDPOINT_URL" ]; then
-      echo "ERROR: R2_ENDPOINT_URL is not set. Skipping database dump download."
-      R2_IMPORT_SUCCESS=false
-    else
-      # Make sure endpoint URL has proper format
-      if [[ "$R2_ENDPOINT_URL" != http* ]]; then
-        echo "Adding https:// prefix to R2_ENDPOINT_URL"
-        R2_ENDPOINT_URL="https://$R2_ENDPOINT_URL"
-      fi
-      
-      echo "Downloading database dump from Cloudflare R2 using endpoint: $R2_ENDPOINT_URL"
-      if aws s3 --endpoint-url="$R2_ENDPOINT_URL" cp "s3://$R2_BUCKET_NAME/$R2_OBJECT_KEY" /tmp/bookdb_dump.sql; then
-        echo "Successfully downloaded database dump"
-        R2_IMPORT_SUCCESS=true
-      else
-        echo "Failed to download database dump, continuing without import"
-        R2_IMPORT_SUCCESS=false
-      fi
-    fi
+    SKIP_PGDUMP_DOWNLOAD=false
   fi
 else
-  echo "No tables found, proceeding with migrations and data import"
+  echo "No tables found, proceeding with migrations first, then data import"
   SKIP_MIGRATIONS=false
   BOOKS_COUNT=0
-  
-  # Debug log environment variables
+  SKIP_PGDUMP_DOWNLOAD=false
+fi
+
+# First step: Apply migrations if needed
+if [ "$SKIP_MIGRATIONS" = false ]; then
+  echo "Applying migrations using 0001_init.sql"
+  # Apply the initial migration file explicitly
+  migration="/root/sql/migrations/0001_init.sql"
+  if [ -f "$migration" ]; then
+    echo "Applying migration: $migration"
+    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f "$migration" || { 
+      echo "Error: Migration $migration failed!"
+      exit 1
+    }
+    echo "Migration completed successfully"
+  else
+    echo "Error: Migration file $migration not found!"
+    exit 1
+  fi
+else
+  echo "Migrations skipped - database already exists with tables"
+fi
+
+# Second step: Download pgdump if needed
+if [ "$SKIP_PGDUMP_DOWNLOAD" = false ]; then
   echo "Debug: Environment Variables"
   echo "R2_ENDPOINT_URL: '${R2_ENDPOINT_URL}'"
   echo "R2_BUCKET_NAME: '${R2_BUCKET_NAME}'"
   echo "R2_OBJECT_KEY: '${R2_OBJECT_KEY}'"
   
-  # Configure AWS CLI for Cloudflare R2
-  mkdir -p ~/.aws
-  echo "[default]
-aws_access_key_id=$R2_ACCESS_KEY_ID
-aws_secret_access_key=$R2_SECRET_ACCESS_KEY
-" > ~/.aws/credentials
-  
-  # Check and fix R2 endpoint URL if needed
-  if [ -z "$R2_ENDPOINT_URL" ]; then
-    echo "ERROR: R2_ENDPOINT_URL is not set. Skipping database dump download."
-    R2_IMPORT_SUCCESS=false
+  # Build the download URL from R2 variables
+  if [ -z "$R2_ENDPOINT_URL" ] || [ -z "$R2_BUCKET_NAME" ] || [ -z "$R2_OBJECT_KEY" ]; then
+    echo "ERROR: One or more R2 environment variables are not set. Skipping database dump download."
+    PGDUMP_IMPORT_SUCCESS=false
   else
     # Make sure endpoint URL has proper format
-    if [[ "$R2_ENDPOINT_URL" != http* ]]; then
-      echo "Adding https:// prefix to R2_ENDPOINT_URL"
-      R2_ENDPOINT_URL="https://$R2_ENDPOINT_URL"
+    # Remove trailing slash if present
+    R2_ENDPOINT_URL_CLEANED=${R2_ENDPOINT_URL%/}
+    # Add https:// prefix if needed
+    if [[ "$R2_ENDPOINT_URL_CLEANED" != http* ]]; then
+      R2_ENDPOINT_URL_CLEANED="https://$R2_ENDPOINT_URL_CLEANED"
     fi
     
-    echo "Downloading database dump from Cloudflare R2 using endpoint: $R2_ENDPOINT_URL"
-    if aws s3 --endpoint-url="$R2_ENDPOINT_URL" cp "s3://$R2_BUCKET_NAME/$R2_OBJECT_KEY" /tmp/bookdb_dump.sql; then
+    # Construct the full URL (R2 format is typically endpoint/bucket/object)
+    DUMP_URL="${R2_ENDPOINT_URL_CLEANED}/${R2_BUCKET_NAME}/${R2_OBJECT_KEY}"
+    
+    echo "Downloading database dump from constructed URL: $DUMP_URL"
+    if curl -L "$DUMP_URL" -o /tmp/bookdb_dump.sql; then
       echo "Successfully downloaded database dump"
-      R2_IMPORT_SUCCESS=true
+      PGDUMP_IMPORT_SUCCESS=true
     else
       echo "Failed to download database dump, continuing without import"
-      R2_IMPORT_SUCCESS=false
+      PGDUMP_IMPORT_SUCCESS=false
     fi
   fi
-fi
-
-# Apply migrations if needed
-if [ "$SKIP_MIGRATIONS" = false ]; then
-  echo "Applying migrations"
-  # Find and apply migration files
-  for migration in /root/sql/migrations/*.sql; do
-    echo "Applying migration: $migration"
-    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f "$migration" || echo "Warning: Migration $migration may have had errors"
-  done
 else
-  echo "Migrations skipped - database already exists with tables"
+  echo "Skipping pgdump download - database already populated"
+  PGDUMP_IMPORT_SUCCESS=false
 fi
 
-# Import the R2 database dump if download was successful and either:
-# 1. No tables exist and migrations were applied, or
-# 2. Tables exist but no data was found
-if [ "$R2_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ] && ([ "$SKIP_MIGRATIONS" = false ] || [ "$BOOKS_COUNT" = "0" ]); then
+# Third step: Import the database dump if download was successful
+if [ "$PGDUMP_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ]; then
   echo "Preparing database dump by fixing ownership issues"
   
   # First attempt to create the user if it doesn't exist
@@ -131,7 +108,7 @@ if [ "$R2_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ] && ([ "$SKIP
   echo "Creating a modified version of the dump file with current database user ownership"
   sed "s/yamirghofran0/$DB_USER/g" /tmp/bookdb_dump.sql > /tmp/bookdb_dump_modified.sql
   
-  echo "Importing modified database dump from R2"
+  echo "Importing modified database dump"
   if PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/bookdb_dump_modified.sql; then
     echo "Database import completed successfully"
   else
@@ -148,7 +125,11 @@ if [ "$R2_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ] && ([ "$SKIP
     PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'origin';"
   fi
 else
-  echo "Skipping database import - no dump file was found or download failed"
+  if [ "$SKIP_PGDUMP_DOWNLOAD" = true ]; then
+    echo "Skipping database import - database already populated"
+  else
+    echo "Skipping database import - no dump file was found or download failed"
+  fi
 fi
 
 echo "Database setup complete, starting server"

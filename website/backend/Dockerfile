@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o server ./cmd/server
 FROM alpine:latest
 
 # Install ca-certificates for HTTPS requests and tools for database operations
-RUN apk --no-cache add ca-certificates postgresql-client wget curl jq bash aws-cli
+RUN apk --no-cache add ca-certificates postgresql-client wget curl jq bash
 
 WORKDIR /root/
 

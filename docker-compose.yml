@@ -54,8 +54,8 @@ services:
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
     depends_on:
-      - bookdb-postgres
-      - bookdb-qdrant
+      - postgres
+      - qdrant
     networks:
       - backend-network
     healthcheck:
@@ -66,7 +66,7 @@ services:
       start_period: 120s
 
   # PostgreSQL database
-  bookdb-postgres:
+  postgres:
     image: postgres:16-alpine
     container_name: bookdb-postgres
     volumes:
@@ -107,7 +107,7 @@ services:
       - backend-network
 
   # Qdrant vector database
-  bookdb-qdrant:
+  qdrant:
     image: qdrant/qdrant:latest
     container_name: bookdb-qdrant
     # No port mappings needed - accessed internally by backend and through Cloudflare Tunnel
