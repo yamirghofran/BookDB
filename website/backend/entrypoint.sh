@@ -42,15 +42,31 @@ else
   fi
 fi
 
-echo "Applying migrations"
-# Find and apply migration files
-for migration in /root/sql/migrations/*.sql; do
-  echo "Applying migration: $migration"
-  PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f "$migration" || echo "Warning: Migration $migration may have had errors"
-done
+# Check if database tables already exist
+echo "Checking if database tables already exist..."
+TABLES_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
 
-# Import the R2 database dump if download was successful
-if [ "$R2_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ]; then
+if [ "$TABLES_COUNT" -gt 0 ]; then
+  echo "Database already has $TABLES_COUNT tables, skipping migrations"
+  SKIP_MIGRATIONS=true
+else
+  echo "No tables found, proceeding with migrations"
+  SKIP_MIGRATIONS=false
+fi
+
+if [ "$SKIP_MIGRATIONS" = false ]; then
+  echo "Applying migrations"
+  # Find and apply migration files
+  for migration in /root/sql/migrations/*.sql; do
+    echo "Applying migration: $migration"
+    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f "$migration" || echo "Warning: Migration $migration may have had errors"
+  done
+else
+  echo "Migrations skipped - database already exists with tables"
+fi
+
+# Import the R2 database dump if download was successful and tables don't exist
+if [ "$R2_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ] && [ "$SKIP_MIGRATIONS" = false ]; then
   echo "Preparing database dump by fixing ownership issues"
   
   # First attempt to create the user if it doesn't exist
