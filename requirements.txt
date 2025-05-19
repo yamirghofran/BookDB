@@ -13,6 +13,7 @@ faker
 joblib
 boto3
 PyYAML
+<<<<<<< HEAD
 python-dotenv
 psycopg2-binary
 <<<<<<< HEAD
@@ -23,3 +24,6 @@ python-dotenv
 =======
 pytz
 >>>>>>> 98a0a8b (Update requirements.txt)
+=======
+names
+>>>>>>> c0faa5f (Add names to requirements)
