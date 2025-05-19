@@ -50,7 +50,7 @@ services:
     networks:
       - backend-network
     healthcheck:
-      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:8080/health" ]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health" ]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -67,6 +67,14 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-bookdb}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bookdb_password}
       - POSTGRES_DB=${POSTGRES_DB:-bookdb}
+      # Increased WAL size and other tuning parameters to prevent frequent checkpoints
+      - POSTGRES_INITDB_ARGS=--data-checksums
+      - POSTGRES_INITDB_WALDIR=/var/lib/postgresql/wal
+      # PostgreSQL configuration parameters
+      - POSTGRES_SHARED_BUFFERS=256MB
+      - POSTGRES_MAX_WAL_SIZE=2GB
+      - POSTGRES_MIN_WAL_SIZE=1GB
+      - POSTGRES_CHECKPOINT_TIMEOUT=15min
     restart: unless-stopped
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bookdb}" ]
@@ -95,11 +103,11 @@ services:
       - backend-network
       - cloudflared # Added to allow frontend to connect directly if needed
     healthcheck:
-      test: [ "CMD", "curl", "--http1.1", "-f", "-H", "Accept: application/json", "-H", "User-Agent: Docker-Healthcheck/1.0", "http://localhost:6333/healthz" ]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:6333/healthz" ]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 15s
+      start_period: 30s
     # Qdrant population service
 
 volumes:

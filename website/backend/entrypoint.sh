@@ -51,11 +51,36 @@ done
 
 # Import the R2 database dump if download was successful
 if [ "$R2_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ]; then
-  echo "Importing database dump from R2"
-  if PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/bookdb_dump.sql; then
+  echo "Preparing database dump by fixing ownership issues"
+  
+  # First attempt to create the user if it doesn't exist
+  echo "Attempting to create the 'yamirghofran0' user if it doesn't exist"
+  PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "DO \$\$ 
+  BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='yamirghofran0') THEN
+      CREATE ROLE yamirghofran0 WITH LOGIN PASSWORD 'temp_password';
+    END IF;
+  END \$\$;" || echo "Could not create role, will proceed with substitution"
+  
+  # Create a modified version of the dump with substituted ownership
+  echo "Creating a modified version of the dump file with current database user ownership"
+  sed "s/yamirghofran0/$DB_USER/g" /tmp/bookdb_dump.sql > /tmp/bookdb_dump_modified.sql
+  
+  echo "Importing modified database dump from R2"
+  if PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/bookdb_dump_modified.sql; then
     echo "Database import completed successfully"
   else
-    echo "Warning: Database import may have had errors, but continuing"
+    echo "Warning: Database import had errors. Attempting alternative approach with disable/enable triggers"
+    
+    # Try importing with triggers disabled
+    echo "Disabling triggers before import"
+    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'replica';"
+    
+    echo "Importing with triggers disabled"
+    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/bookdb_dump_modified.sql || echo "Import still failed, continuing anyway"
+    
+    echo "Re-enabling triggers"
+    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'origin';"
   fi
 else
   echo "Skipping database import - no dump file was found or download failed"
