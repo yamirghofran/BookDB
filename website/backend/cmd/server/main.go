@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	// Keep if you need it for other things, but UUID point ID is used below
+	"github.com/jackc/pgx/v5/pgxpool" // Changed from pgx to pgxpool
 	"github.com/jackc/pgx/v5"
 	"github.com/joho/godotenv"
 

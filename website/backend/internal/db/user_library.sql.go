@@ -82,6 +82,52 @@ func (q *Queries) GetUserLibrary(ctx context.Context, userID pgtype.UUID) ([]Get
 	return items, nil
 }
 
+const getUsersByBookInLibrary = `-- name: GetUsersByBookInLibrary :many
+SELECT
+    u.id,
+    u.name,
+    -- Add u.avatar_url here if you add it to the Users table later
+    COUNT(*) OVER() as total_users
+FROM Users u
+JOIN UserLibrary ul ON u.id = ul.user_id
+WHERE ul.book_id = $1
+ORDER BY u.name -- Or by ul.added_at if preferred
+LIMIT $2
+OFFSET $3
+`
+
+type GetUsersByBookInLibraryParams struct {
+	BookID pgtype.UUID
+	Limit  int32
+	Offset int32
+}
+
+type GetUsersByBookInLibraryRow struct {
+	ID         pgtype.UUID
+	Name       string
+	TotalUsers int64
+}
+
+func (q *Queries) GetUsersByBookInLibrary(ctx context.Context, arg GetUsersByBookInLibraryParams) ([]GetUsersByBookInLibraryRow, error) {
+	rows, err := q.db.Query(ctx, getUsersByBookInLibrary, arg.BookID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUsersByBookInLibraryRow
+	for rows.Next() {
+		var i GetUsersByBookInLibraryRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.TotalUsers); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const isBookInLibrary = `-- name: IsBookInLibrary :one
 SELECT EXISTS (
     SELECT 1

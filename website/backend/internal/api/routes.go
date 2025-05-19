@@ -63,7 +63,7 @@ func (s *Server) setupRouter() {
 			books.PUT("/:id", s.Handlers.UpdateBook)
 			books.DELETE("/:id", s.Handlers.DeleteBook)
 			books.GET("/search", s.Handlers.SearchBooksByContent)
-
+			books.GET("/:id/library-users", s.Handlers.GetUsersWithBookInLibrary) // Changed route
 		}
 
 		// People endpoints
@@ -72,6 +72,7 @@ func (s *Server) setupRouter() {
 			people.GET("", s.Handlers.ListPeople)
 			people.GET("/:id", s.Handlers.GetPerson)
 			people.POST("", s.Handlers.CreatePerson)
+			people.GET("/:id/details", s.Handlers.GetPersonDetails) // New route for person details
 		}
 
 		// Library endpoints
@@ -87,7 +88,10 @@ func (s *Server) setupRouter() {
 		recommendations := api.Group("/recommendations")
 		{
 			recommendations.GET("/books/:id/similar", s.Handlers.GetSimilarBooks)
-			recommendations.GET("/users/:id", s.Handlers.GetRecommendationsForUser)
+			// recommendations.GET("/users/:id", s.Handlers.GetRecommendationsForUser) // This was for collaborative filtering by user for books
+			recommendations.POST("/anonymous", s.Handlers.GetAnonymousRecommendations)
+			recommendations.GET("/users/:id/similar", s.Handlers.GetSimilarUsers)             // New route for similar users
+			recommendations.GET("/users/:id/books", s.Handlers.GetBookRecommendationsForUser) // New route for book recommendations for a user
 		}
 
 		// Auth endpoints

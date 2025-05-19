@@ -1,4 +1,5 @@
 import { Outlet, createRootRouteWithContext } from "@tanstack/react-router";
+import { UserLibraryProvider } from "@/contexts/UserLibraryContext";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 
 import TanstackQueryLayout from "../integrations/tanstack-query/layout";
@@ -12,13 +13,14 @@ interface MyRouterContext {
 
 export const Route = createRootRouteWithContext<MyRouterContext>()({
 	component: () => (
-		<>
-			<Navbar />
+		<UserLibraryProvider>
+			<>
+				<Navbar />
+				<Outlet />
+				<TanStackRouterDevtools />
 
-			<Outlet />
-			<TanStackRouterDevtools />
-
-			<TanstackQueryLayout />
-		</>
+				<TanstackQueryLayout />
+			</>
+		</UserLibraryProvider>
 	),
 });
