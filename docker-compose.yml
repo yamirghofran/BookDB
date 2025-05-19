@@ -76,14 +76,18 @@ services:
       - POSTGRES_SHARED_BUFFERS=256MB
       - POSTGRES_MAX_WAL_SIZE=2GB
       - POSTGRES_MIN_WAL_SIZE=1GB
-      - POSTGRES_CHECKPOINT_TIMEOUT=10min
+      - POSTGRES_CHECKPOINT_TIMEOUT=5min
       - POSTGRES_CHECKPOINT_COMPLETION_TARGET=0.9
       - POSTGRES_SYNCHRONOUS_COMMIT=on
+      - POSTGRES_FULL_PAGE_WRITES=on
       - POSTGRES_WAL_LEVEL=replica
       - POSTGRES_MAX_WAL_SENDERS=3
       - POSTGRES_ARCHIVE_MODE=on
-      - POSTGRES_ARCHIVE_COMMAND=cp %p /var/lib/postgresql/archive/%f
+      - POSTGRES_ARCHIVE_COMMAND=test ! -f /var/lib/postgresql/archive/%f && cp %p /var/lib/postgresql/archive/%f
       - POSTGRES_RESTORE_COMMAND=cp /var/lib/postgresql/archive/%f %p
+      - POSTGRES_RECOVERY_TARGET_TIMELINE=latest
+      - POSTGRES_ARCHIVE_TIMEOUT=60
+      - POSTGRES_WAL_KEEP_SEGMENTS=10
     restart: unless-stopped
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bookdb}" ]
