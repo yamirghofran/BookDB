@@ -55,11 +55,11 @@ services:
     networks:
       - backend-network
     healthcheck:
-      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health" ]
+      test: [ "CMD", "curl", "-f", "http://0.0.0.0:8080/api/health" ]
       interval: 30s
-      timeout: 3s
+      timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 30s
 
   # PostgreSQL database
   postgres:
@@ -119,11 +119,11 @@ services:
       - backend-network
       - cloudflared # Added to allow frontend to connect directly if needed
     healthcheck:
-      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:6333/healthz" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:6333/health" ]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
     # Qdrant population service
 
 volumes:
