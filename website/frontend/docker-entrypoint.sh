@@ -1,8 +1,17 @@
 #!/bin/sh
 
-# Set default values if environment variables are not set
-: "${BACKEND_SERVICE:=backend}"
-: "${QDRANT_SERVICE:=qdrant}"
+# Check if required environment variables are set
+if [ -z "$BACKEND_SERVICE" ]; then
+  echo "ERROR: BACKEND_SERVICE environment variable must be set"
+  exit 1
+fi
+
+if [ -z "$QDRANT_SERVICE" ]; then
+  echo "ERROR: QDRANT_SERVICE environment variable must be set"
+  exit 1
+fi
+
+# Set default values only for optional environment variables
 : "${VIRTUAL_HOST:=localhost}"
 : "${VIRTUAL_PORT:=80}"
 : "${APP_ENV:=production}"

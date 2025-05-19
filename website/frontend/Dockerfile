@@ -38,9 +38,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
 # Expose HTTP port
 EXPOSE 80
 
-# Set default service names
-ENV BACKEND_SERVICE=backend QDRANT_SERVICE=qdrant
-
 # Make the entrypoint script executable
 RUN chmod +x /docker-entrypoint.sh
 

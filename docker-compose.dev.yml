@@ -17,17 +17,17 @@ services:
       - ./website/frontend/public:/usr/share/nginx/html/public:ro
     restart: unless-stopped
     depends_on:
-      - backend
-      - qdrant
+      - bookdb-backend-dev
+      - bookdb-qdrant-dev
     networks:
       - app_network
     environment:
-      - BACKEND_SERVICE=backend
-      - QDRANT_SERVICE=qdrant
+      - BACKEND_SERVICE=bookdb-backend-dev
+      - QDRANT_SERVICE=bookdb-qdrant-dev
       - VIRTUAL_HOST=localhost
 
   # Backend Go service
-  backend:
+  bookdb-backend-dev:
     build:
       context: ./website/backend
       dockerfile: Dockerfile
@@ -36,12 +36,12 @@ services:
       - "8080:8080" # Direct access to API at localhost:8080
     restart: unless-stopped
     environment:
-      - DB_HOST=postgres
+      - DB_HOST=bookdb-postgres-dev
       - DB_PORT=5432
       - DB_USER=bookdb_dev
       - DB_PASSWORD=bookdb_dev_password
       - DB_NAME=bookdb_dev
-      - QDRANT_HOST=qdrant
+      - QDRANT_HOST=bookdb-qdrant-dev
       - QDRANT_PORT=6333
       - QDRANT_HTTP_VERSION=1.1
       - APP_ENV=development
@@ -56,8 +56,8 @@ services:
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
     depends_on:
-      - postgres
-      - qdrant
+      - bookdb-postgres-dev
+      - bookdb-qdrant-dev
     networks:
       - app_network
     healthcheck:
@@ -68,7 +68,7 @@ services:
       start_period: 5s
 
   # PostgreSQL database for development
-  postgres:
+  bookdb-postgres-dev:
     image: postgres:16-alpine
     container_name: bookdb-postgres-dev
     ports:
@@ -92,7 +92,7 @@ services:
       retries: 3
 
   # Qdrant vector database
-  qdrant:
+  bookdb-qdrant-dev:
     image: qdrant/qdrant:latest
     container_name: bookdb-qdrant-dev
     ports:

@@ -63,7 +63,7 @@ func main() {
 	// Get Qdrant configuration from environment
 	qdrantHost := os.Getenv("QDRANT_HOST")
 	if qdrantHost == "" {
-		qdrantHost = "qdrant" // Default for Docker networking
+		qdrantHost = "bookdb-qdrant" // Default for Docker networking
 	}
 	
 	qdrantPort := 6333 // Default Qdrant port
