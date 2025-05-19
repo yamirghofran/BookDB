@@ -8,25 +8,21 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      - "443:443"
     volumes:
-      # Mount SSL certificates (if using local certs)
-      - ${SSL_CERTS_PATH:-./ssl}:/etc/nginx/ssl:ro
       # Mount nginx logs for easy access
-      - ./logs/nginx:/var/log/nginx
+      - ${LOG_PATH:-/data/logs}/nginx:/var/log/nginx
     depends_on:
       - backend
     networks:
       - cloudflared
       - backend-network # Only connected to backend network and cloudflared
-    # For Nginx proxy manager access:
+    # Environment variables for nginx configuration
     environment:
       - BACKEND_SERVICE=bookdb-backend
       - QDRANT_SERVICE=bookdb-qdrant
       - VIRTUAL_HOST=${DOMAIN:-localhost}
       - VIRTUAL_PORT=80
-      - SSL_CERT_PATH=${SSL_CERT_PATH:-/etc/nginx/ssl/default.crt}
-      - SSL_KEY_PATH=${SSL_KEY_PATH:-/etc/nginx/ssl/default.key}
+      - APP_ENV=${APP_ENV:-production}
     # Backend Go service
   backend:
     build:
@@ -74,7 +70,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - postgres_wal:/var/lib/postgresql/wal
       - postgres_archive:/var/lib/postgresql/archive
-      - ./postgres/init-minimal.sql:/docker-entrypoint-initdb.d/init.sql
+      - ${CONFIG_PATH:-/data/config}/postgres/init-minimal.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-bookdb}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bookdb_password}
@@ -136,12 +132,28 @@ services:
 volumes:
   postgres_data:
     driver: local
+    driver_opts:
+      type: none
+      device: ${DATA_PATH:-/data}/postgres/data
+      o: bind
   postgres_wal:
     driver: local
+    driver_opts:
+      type: none
+      device: ${DATA_PATH:-/data}/postgres/wal
+      o: bind
   postgres_archive:
     driver: local
+    driver_opts:
+      type: none
+      device: ${DATA_PATH:-/data}/postgres/archive
+      o: bind
   qdrant_data:
     driver: local
+    driver_opts:
+      type: none
+      device: ${DATA_PATH:-/data}/qdrant
+      o: bind
 
 networks:
   cloudflared:
