@@ -6,54 +6,101 @@ until PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NA
   echo "PostgreSQL is unavailable - sleeping for 2 seconds"
   sleep 2
 done
-echo "PostgreSQL is up - proceeding with migrations"
+echo "PostgreSQL is up - proceeding with setup"
 
-# Debug log environment variables
-echo "Debug: Environment Variables"
-echo "R2_ENDPOINT_URL: '${R2_ENDPOINT_URL}'"
-echo "R2_BUCKET_NAME: '${R2_BUCKET_NAME}'"
-echo "R2_OBJECT_KEY: '${R2_OBJECT_KEY}'"
-
-# Configure AWS CLI for Cloudflare R2
-mkdir -p ~/.aws
-echo "[default]
-aws_access_key_id=$R2_ACCESS_KEY_ID
-aws_secret_access_key=$R2_SECRET_ACCESS_KEY
-" > ~/.aws/credentials
-
-# Check and fix R2 endpoint URL if needed
-if [ -z "$R2_ENDPOINT_URL" ]; then
-  echo "ERROR: R2_ENDPOINT_URL is not set. Skipping database dump download."
-  R2_IMPORT_SUCCESS=false
-else
-  # Make sure endpoint URL has proper format (starts with http:// or https://)
-  if [[ "$R2_ENDPOINT_URL" != http* ]]; then
-    echo "Adding https:// prefix to R2_ENDPOINT_URL"
-    R2_ENDPOINT_URL="https://$R2_ENDPOINT_URL"
-  fi
-  
-  echo "Downloading database dump from Cloudflare R2 using endpoint: $R2_ENDPOINT_URL"
-  if aws s3 --endpoint-url="$R2_ENDPOINT_URL" cp "s3://$R2_BUCKET_NAME/$R2_OBJECT_KEY" /tmp/bookdb_dump.sql; then
-    echo "Successfully downloaded database dump"
-    R2_IMPORT_SUCCESS=true
-  else
-    echo "Failed to download database dump, continuing without import"
-    R2_IMPORT_SUCCESS=false
-  fi
-fi
-
-# Check if database tables already exist
+# Check if database tables already exist FIRST before downloading anything
 echo "Checking if database tables already exist..."
 TABLES_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
 
 if [ "$TABLES_COUNT" -gt 0 ]; then
-  echo "Database already has $TABLES_COUNT tables, skipping migrations"
-  SKIP_MIGRATIONS=true
+  echo "Database already has $TABLES_COUNT tables, checking for data..."
+  
+  # Check if there's actual data in a key table (assuming books table exists)
+  BOOKS_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
+  
+  if [ "$BOOKS_COUNT" -gt 0 ]; then
+    echo "Found $BOOKS_COUNT books in the database. Database is already populated, skipping R2 download and import."
+    SKIP_MIGRATIONS=true
+    R2_IMPORT_SUCCESS=false
+  else
+    echo "Tables exist but no data found. Will check R2 for data import."
+    SKIP_MIGRATIONS=true
+    
+    # Debug log environment variables
+    echo "Debug: Environment Variables"
+    echo "R2_ENDPOINT_URL: '${R2_ENDPOINT_URL}'"
+    echo "R2_BUCKET_NAME: '${R2_BUCKET_NAME}'"
+    echo "R2_OBJECT_KEY: '${R2_OBJECT_KEY}'"
+    
+    # Configure AWS CLI for Cloudflare R2
+    mkdir -p ~/.aws
+    echo "[default]
+aws_access_key_id=$R2_ACCESS_KEY_ID
+aws_secret_access_key=$R2_SECRET_ACCESS_KEY
+" > ~/.aws/credentials
+    
+    # Check and fix R2 endpoint URL if needed
+    if [ -z "$R2_ENDPOINT_URL" ]; then
+      echo "ERROR: R2_ENDPOINT_URL is not set. Skipping database dump download."
+      R2_IMPORT_SUCCESS=false
+    else
+      # Make sure endpoint URL has proper format
+      if [[ "$R2_ENDPOINT_URL" != http* ]]; then
+        echo "Adding https:// prefix to R2_ENDPOINT_URL"
+        R2_ENDPOINT_URL="https://$R2_ENDPOINT_URL"
+      fi
+      
+      echo "Downloading database dump from Cloudflare R2 using endpoint: $R2_ENDPOINT_URL"
+      if aws s3 --endpoint-url="$R2_ENDPOINT_URL" cp "s3://$R2_BUCKET_NAME/$R2_OBJECT_KEY" /tmp/bookdb_dump.sql; then
+        echo "Successfully downloaded database dump"
+        R2_IMPORT_SUCCESS=true
+      else
+        echo "Failed to download database dump, continuing without import"
+        R2_IMPORT_SUCCESS=false
+      fi
+    fi
+  fi
 else
-  echo "No tables found, proceeding with migrations"
+  echo "No tables found, proceeding with migrations and data import"
   SKIP_MIGRATIONS=false
+  BOOKS_COUNT=0
+  
+  # Debug log environment variables
+  echo "Debug: Environment Variables"
+  echo "R2_ENDPOINT_URL: '${R2_ENDPOINT_URL}'"
+  echo "R2_BUCKET_NAME: '${R2_BUCKET_NAME}'"
+  echo "R2_OBJECT_KEY: '${R2_OBJECT_KEY}'"
+  
+  # Configure AWS CLI for Cloudflare R2
+  mkdir -p ~/.aws
+  echo "[default]
+aws_access_key_id=$R2_ACCESS_KEY_ID
+aws_secret_access_key=$R2_SECRET_ACCESS_KEY
+" > ~/.aws/credentials
+  
+  # Check and fix R2 endpoint URL if needed
+  if [ -z "$R2_ENDPOINT_URL" ]; then
+    echo "ERROR: R2_ENDPOINT_URL is not set. Skipping database dump download."
+    R2_IMPORT_SUCCESS=false
+  else
+    # Make sure endpoint URL has proper format
+    if [[ "$R2_ENDPOINT_URL" != http* ]]; then
+      echo "Adding https:// prefix to R2_ENDPOINT_URL"
+      R2_ENDPOINT_URL="https://$R2_ENDPOINT_URL"
+    fi
+    
+    echo "Downloading database dump from Cloudflare R2 using endpoint: $R2_ENDPOINT_URL"
+    if aws s3 --endpoint-url="$R2_ENDPOINT_URL" cp "s3://$R2_BUCKET_NAME/$R2_OBJECT_KEY" /tmp/bookdb_dump.sql; then
+      echo "Successfully downloaded database dump"
+      R2_IMPORT_SUCCESS=true
+    else
+      echo "Failed to download database dump, continuing without import"
+      R2_IMPORT_SUCCESS=false
+    fi
+  fi
 fi
 
+# Apply migrations if needed
 if [ "$SKIP_MIGRATIONS" = false ]; then
   echo "Applying migrations"
   # Find and apply migration files
@@ -65,8 +112,10 @@ else
   echo "Migrations skipped - database already exists with tables"
 fi
 
-# Import the R2 database dump if download was successful and tables don't exist
-if [ "$R2_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ] && [ "$SKIP_MIGRATIONS" = false ]; then
+# Import the R2 database dump if download was successful and either:
+# 1. No tables exist and migrations were applied, or
+# 2. Tables exist but no data was found
+if [ "$R2_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ] && ([ "$SKIP_MIGRATIONS" = false ] || [ "$BOOKS_COUNT" = "0" ]); then
   echo "Preparing database dump by fixing ownership issues"
   
   # First attempt to create the user if it doesn't exist
