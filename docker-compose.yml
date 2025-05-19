@@ -6,8 +6,7 @@ services:
       dockerfile: Dockerfile
     container_name: bookdb-frontend
     restart: unless-stopped
-    ports:
-      - "80:80"
+    # No ports exposed - Cloudflare Tunnel will connect directly to the container
     volumes:
       # Mount nginx logs for easy access
       - ${LOG_PATH:-/data/logs}/nginx:/var/log/nginx
@@ -107,9 +106,7 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: bookdb-qdrant
-    ports:
-      - "127.0.0.1:6333:6333" # REST API - limited to localhost access for production
-      - "127.0.0.1:6334:6334" # gRPC API - limited to localhost access for production
+    # No port mappings needed - accessed internally by backend and through Cloudflare Tunnel
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
