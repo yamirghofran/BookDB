@@ -128,28 +128,12 @@ services:
 volumes:
   postgres_data:
     driver: local
-    driver_opts:
-      type: none
-      device: ${DATA_PATH:-/data}/postgres/data
-      o: bind
   postgres_wal:
     driver: local
-    driver_opts:
-      type: none
-      device: ${DATA_PATH:-/data}/postgres/wal
-      o: bind
   postgres_archive:
     driver: local
-    driver_opts:
-      type: none
-      device: ${DATA_PATH:-/data}/postgres/archive
-      o: bind
   qdrant_data:
     driver: local
-    driver_opts:
-      type: none
-      device: ${DATA_PATH:-/data}/qdrant
-      o: bind
 
 networks:
   cloudflared:
