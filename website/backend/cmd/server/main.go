@@ -6,8 +6,8 @@ import (
 	"os"
 	"strconv"
 
-	// Using only the core pgx package
-	"github.com/jackc/pgx/v5"
+	// Replace pgx with pgxpool for connection pooling
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 
 	"github.com/yamirghofran/BookDB/internal/api"
@@ -52,13 +52,27 @@ func main() {
 	if postgresqlURL == "" {
 		log.Fatalf("FATAL: No database connection details provided")
 	}
-	
-	log.Printf("Connecting to PostgreSQL database...")
-	conn, err := pgx.Connect(context.Background(), postgresqlURL)
+		log.Printf("Creating PostgreSQL connection pool...")
+	config, err := pgxpool.ParseConfig(postgresqlURL)
 	if err != nil {
-		log.Fatalf("FATAL: Error connecting to database: %v", err)
+		log.Fatalf("FATAL: Invalid database connection string: %v", err)
 	}
-	defer conn.Close(context.Background())
+	
+	// Set pool configuration - adjust these values based on your workload
+	config.MaxConns = 10 // Set maximum number of connections
+	
+	// Create the connection pool
+	dbPool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		log.Fatalf("FATAL: Error creating database connection pool: %v", err)
+	}
+	defer dbPool.Close()
+	
+	// Verify connection
+	if err := dbPool.Ping(context.Background()); err != nil {
+		log.Fatalf("FATAL: Could not ping database: %v", err)
+	}
+	log.Printf("Successfully connected to PostgreSQL database")
 
 	// Get Qdrant configuration from environment
 	qdrantHost := os.Getenv("QDRANT_HOST")
@@ -80,9 +94,8 @@ func main() {
 		log.Fatalf("FATAL: Error creating Qdrant client: %v", err)
 	}
 	defer qdrantClient.Close()
-
-	// Assuming db.New returns your sqlc generated queries struct
-	queries := db.New(conn)
+	// Create the DB queries instance using the connection pool
+	queries := db.New(dbPool)
 
 	// Create and start the API server
 	port := os.Getenv("PORT")
