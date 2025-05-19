@@ -123,14 +123,7 @@ services:
     restart: unless-stopped
     networks:
       - backend-network
-      - cloudflared # Added to allow frontend to connect directly if needed
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:6333/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    # Qdrant population service
+      - cloudflared
 
 volumes:
   postgres_data:
