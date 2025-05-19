@@ -15,7 +15,11 @@ boto3
 PyYAML
 python-dotenv
 psycopg2-binary
+<<<<<<< HEAD
 torchvision
 tensorboardX
 accelerate>=0.27.2
 python-dotenv
+=======
+pytz
+>>>>>>> 98a0a8b (Update requirements.txt)
