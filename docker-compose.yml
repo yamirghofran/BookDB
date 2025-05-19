@@ -8,8 +8,8 @@ services:
     restart: unless-stopped
     # No ports exposed - Cloudflare Tunnel will connect directly to the container
     volumes:
-      # Mount nginx logs for easy access
-      - ${LOG_PATH:-/data/logs}/nginx:/var/log/nginx
+      # Using default Docker volume for nginx logs
+      - nginx_logs:/var/log/nginx
     depends_on:
       - backend
     networks:
@@ -75,7 +75,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - postgres_wal:/var/lib/postgresql/wal
       - postgres_archive:/var/lib/postgresql/archive
-      - ${CONFIG_PATH:-/data/config}/postgres/init-minimal.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./postgres/init-minimal.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-bookdb}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bookdb_password}
@@ -133,6 +133,8 @@ volumes:
   postgres_archive:
     driver: local
   qdrant_data:
+    driver: local
+  nginx_logs:
     driver: local
 
 networks:
