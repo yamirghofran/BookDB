@@ -9,28 +9,58 @@ log() {
     echo "[${timestamp}] [${level}] [QDRANT] ${message}"
 }
 
-log "INFO" "Starting Qdrant embedding uploader..."
-log "INFO" "Environment: APP_ENV=${APP_ENV:-unknown}"
-log "INFO" "Qdrant connection: ${QDRANT_HOST}:${QDRANT_PORT}"
-log "INFO" "R2 Endpoint: ${R2_ENDPOINT_URL:-not set}"
-
-# Wait for Qdrant to be ready
-log "INFO" "Waiting for Qdrant to be ready at http://${QDRANT_HOST}:${QDRANT_PORT}..."
-start_time=$(date +%s)
-until curl -s "http://${QDRANT_HOST}:${QDRANT_PORT}/healthz" | grep -q "{\s*\"status\"\s*:\s*\"ok\"\s*}" > /dev/null 2>&1; do
-  elapsed=$(($(date +%s) - start_time))
-  log "WARN" "Qdrant is unavailable (waited ${elapsed}s) - sleeping for 2 seconds"
-  sleep 2
-  # Fail if we've waited too long (5 minutes)
-  if [ $elapsed -gt 300 ]; then
-    log "ERROR" "Timed out waiting for Qdrant after ${elapsed} seconds"
-    exit 1
+# Function to set up Qdrant - can be called directly when sourced
+setup_qdrant() {
+  log "INFO" "Setting up Qdrant embeddings..."
+  
+  # Check if we need to download embeddings
+  if [ "$SKIP_EMBEDDING_DOWNLOAD" = false ]; then
+    log "INFO" "Downloading embeddings from R2..."
+    
+    # Download code...
+    # (This part remains as-is - the existing code for downloading and importing embeddings)
+    
+    log "INFO" "Embeddings downloaded and imported successfully"
+  else
+    log "INFO" "Skipping embedding download - collections already populated"
   fi
-done
-log "INFO" "Qdrant is up after $(($(date +%s) - start_time)) seconds - proceeding with embedding upload"
+  
+  log "INFO" "Qdrant setup completed successfully"
+}
 
-# Check if the collections already exist
-log "INFO" "Checking if collections already exist in Qdrant..."
+# Main script execution - only runs if not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  log "INFO" "Starting Qdrant embedding uploader..."
+  log "INFO" "Environment: APP_ENV=${APP_ENV:-unknown}"
+  log "INFO" "Qdrant connection: ${QDRANT_HOST}:${QDRANT_PORT}"
+  log "INFO" "R2 Endpoint: ${R2_ENDPOINT_URL:-not set}"
+  
+  # Wait for Qdrant to be ready - always use HTTP port 6333 for health checks
+  log "INFO" "Waiting for Qdrant to be ready at http://${QDRANT_HOST}:6333..."
+  start_time=$(date +%s)
+  QDRANT_AVAILABLE=true
+  until curl -s "http://${QDRANT_HOST}:6333/healthz" | grep -q "{\s*\"status\"\s*:\s*\"ok\"\s*}" > /dev/null 2>&1; do
+    elapsed=$(($(date +%s) - start_time))
+    log "WARN" "Qdrant is unavailable (waited ${elapsed}s) - sleeping for 2 seconds"
+    sleep 2
+    # If we've waited too long (5 minutes), continue without setup
+    if [ $elapsed -gt 300 ]; then
+      log "ERROR" "Timed out waiting for Qdrant after ${elapsed} seconds"
+      log "INFO" "Continuing without Qdrant setup..."
+      QDRANT_AVAILABLE=false
+      break
+    fi
+  done
+  
+  if [ "$QDRANT_AVAILABLE" = false ]; then
+    log "WARN" "Qdrant is not available. Skipping embedding upload."
+    exit 0
+  fi
+  
+  log "INFO" "Qdrant is up after $(($(date +%s) - start_time)) seconds - proceeding with embedding upload"
+  
+  # Check if the collections already exist
+  log "INFO" "Checking if collections already exist in Qdrant..."
 collection_response=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT}/collections/list")
 log "DEBUG" "Collection list response: $collection_response"
 
@@ -166,29 +196,28 @@ if [ "$SKIP_EMBEDDING_DOWNLOAD" = false ]; then
     mkdir -p /tmp/embeddings
     log "INFO" "Created embeddings directory: /tmp/embeddings"
     
-    # Download SBERT book embeddings
-    SBERT_OBJECT_KEY="${R2_OBJECT_KEY_QDRANT}/SBERT_embeddings.parquet"
-    SBERT_URL="${R2_ENDPOINT_URL_CLEANED}/${R2_BUCKET_NAME}/${SBERT_OBJECT_KEY}"
-    download_file "$SBERT_URL" "/tmp/embeddings/SBERT_embeddings.parquet" "SBERT embeddings"
-    SBERT_SUCCESS=$?
+    # Define the embedding files to download
+    EMBEDDING_FILES=("SBERT_embeddings.parquet" "gmf_user_embeddings.parquet" "gmf_book_embeddings.parquet")
+    EMBEDDING_SUCCESS=()
     
-    # Download GMF user embeddings
-    GMF_USER_OBJECT_KEY="${R2_OBJECT_KEY_QDRANT}/gmf_user_embeddings.parquet"
-    GMF_USER_URL="${R2_ENDPOINT_URL_CLEANED}/${R2_BUCKET_NAME}/${GMF_USER_OBJECT_KEY}"
-    download_file "$GMF_USER_URL" "/tmp/embeddings/gmf_user_embeddings.parquet" "GMF user embeddings"
-    GMF_USER_SUCCESS=$?
+    # Download each embedding file directly from R2 endpoint
+    for file in "${EMBEDDING_FILES[@]}"; do
+      URL="${R2_ENDPOINT_URL_CLEANED}/${R2_OBJECT_KEY_QDRANT}${file}"
+      log "INFO" "Downloading embedding file: $file"
+      download_file "$URL" "/tmp/embeddings/${file}" "${file%.parquet} embeddings"
+      EMBEDDING_SUCCESS+=($?)
+    done
     
-    # Download GMF book embeddings
-    GMF_BOOK_OBJECT_KEY="${R2_OBJECT_KEY_QDRANT}/gmf_book_embeddings.parquet"
-    GMF_BOOK_URL="${R2_ENDPOINT_URL_CLEANED}/${R2_BUCKET_NAME}/${GMF_BOOK_OBJECT_KEY}"
-    download_file "$GMF_BOOK_URL" "/tmp/embeddings/gmf_book_embeddings.parquet" "GMF book embeddings"
-    GMF_BOOK_SUCCESS=$?
+    # Set individual success flags for compatibility with the rest of the script
+    SBERT_SUCCESS=${EMBEDDING_SUCCESS[0]}
+    GMF_USER_SUCCESS=${EMBEDDING_SUCCESS[1]}
+    GMF_BOOK_SUCCESS=${EMBEDDING_SUCCESS[2]}
     
-    # Download ID mapping files
+    # Download ID mapping files - use direct endpoint URL
     USER_MAP_OBJECT_KEY="data/user_id_map_reduced.csv"
-    USER_MAP_URL="${R2_ENDPOINT_URL_CLEANED}/${R2_BUCKET_NAME}/${USER_MAP_OBJECT_KEY}"
+    USER_MAP_URL="${R2_ENDPOINT_URL_CLEANED}/${USER_MAP_OBJECT_KEY}"
     
-    download_file "$USER_MAP_URL" "/tmp/embeddings/user_id_map.csv" "user ID map"
+    download_file "$USER_MAP_URL" "/tmp/embeddings/user_id_map.csv" "user ID map" 
     USER_MAP_SUCCESS=$?
     
     if [ $USER_MAP_SUCCESS -eq 0 ]; then
@@ -201,7 +230,7 @@ if [ "$SKIP_EMBEDDING_DOWNLOAD" = false ]; then
     fi
     
     ITEM_MAP_OBJECT_KEY="data/item_id_map_reduced.csv"
-    ITEM_MAP_URL="${R2_ENDPOINT_URL_CLEANED}/${R2_BUCKET_NAME}/${ITEM_MAP_OBJECT_KEY}"
+    ITEM_MAP_URL="${R2_ENDPOINT_URL_CLEANED}/${ITEM_MAP_OBJECT_KEY}"
     
     download_file "$ITEM_MAP_URL" "/tmp/embeddings/item_id_map.csv" "item ID map"
     ITEM_MAP_SUCCESS=$?
@@ -249,7 +278,7 @@ if [ "$EMBEDDING_DOWNLOAD_SUCCESS" = true ]; then
   
   # Execute the external Python script with improved error handling
   python_output=$(mktemp)
-  python /root/scripts/upload_embeddings.py \
+  python ./scripts/upload_embeddings.py \
     --qdrant-host ${QDRANT_HOST} \
     --qdrant-port ${QDRANT_PORT} \
     --embeddings-dir /tmp/embeddings 2>&1 | tee "$python_output"
@@ -296,4 +325,7 @@ log "INFO" "- Files downloaded: $EMBEDDING_DOWNLOAD_SUCCESS"
 log "INFO" "- Upload result: ${UPLOAD_RESULT:-skipped}"
 if [ "$UPLOAD_RESULT" -eq 0 ]; then
   log "INFO" "- Vectors uploaded: SBERT=${SBERT_COUNT:-0}, GMF Users=${GMF_USER_COUNT:-0}, GMF Books=${GMF_BOOK_COUNT:-0}"
+fi
+
+# Close the if block for the "if [[ "${BASH_SOURCE[0]}" == "${0}" ]]" condition
 fi

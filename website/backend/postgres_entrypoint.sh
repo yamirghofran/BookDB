@@ -9,243 +9,212 @@ log() {
     echo "[${timestamp}] [${level}] [POSTGRES] ${message}"
 }
 
-log "INFO" "Starting PostgreSQL entrypoint script"
-log "INFO" "Environment: APP_ENV=${APP_ENV:-unknown}"
-log "INFO" "Database Connection: ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
-
-log "INFO" "Waiting for PostgreSQL to be ready at ${DB_HOST}:${DB_PORT}..."
-start_time=$(date +%s)
-until PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SELECT 1" > /dev/null 2>&1; do
-  elapsed=$(($(date +%s) - start_time))
-  log "WARN" "PostgreSQL is unavailable (waited ${elapsed}s) - sleeping for 2 seconds"
-  sleep 2
-  # Fail if we've waited too long (5 minutes)
-  if [ $elapsed -gt 300 ]; then
-    log "ERROR" "Timed out waiting for PostgreSQL after ${elapsed} seconds"
-    exit 1
-  fi
-done
-log "INFO" "PostgreSQL is up after $(($(date +%s) - start_time)) seconds - proceeding with setup"
-
-# Check if database tables already exist FIRST before doing anything else
-log "INFO" "Checking if database tables already exist..."
-TABLES_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
-log "INFO" "Found $TABLES_COUNT tables in database schema"
-
-if [ "$TABLES_COUNT" -gt 0 ]; then
-  log "INFO" "Database already has $TABLES_COUNT tables, checking for data..."
+# Function to fix ownership and permissions after import
+fix_ownership() {
+  log "INFO" "Fixing ownership and permissions for database objects..."
   
-  # Check if there's actual data in a key table (assuming books table exists)
-  BOOKS_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
-  log "INFO" "Books table contains $BOOKS_COUNT records"
+  # Generate and run SQL to reassign owned objects to current user
+  cat > /tmp/fix_ownership.sql << EOF
+DO \$\$
+DECLARE
+  r RECORD;
+BEGIN
+  -- Reassign database objects
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+  LOOP
+    EXECUTE 'ALTER TABLE public.' || quote_ident(r.tablename) || ' OWNER TO ' || quote_ident('$DB_USER');
+  END LOOP;
   
-  if [ "$BOOKS_COUNT" -gt 0 ]; then
-    log "INFO" "Found $BOOKS_COUNT books in the database. Database is already populated, skipping migrations and data import."
-    SKIP_MIGRATIONS=true
-    SKIP_PGDUMP_DOWNLOAD=true
+  -- Sequences
+  FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'
+  LOOP
+    EXECUTE 'ALTER SEQUENCE public.' || quote_ident(r.sequencename) || ' OWNER TO ' || quote_ident('$DB_USER');
+  END LOOP;
+  
+  -- Functions
+  FOR r IN SELECT proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'public'
+  LOOP
+    -- Cannot simply alter owner of functions without knowing argument types
+    -- This is a simplification, may not work for all functions
+    BEGIN
+      EXECUTE 'ALTER FUNCTION public.' || quote_ident(r.proname) || '() OWNER TO ' || quote_ident('$DB_USER');
+    EXCEPTION WHEN OTHERS THEN
+      -- Silently continue on error
+    END;
+  END LOOP;
+  
+  -- Fix sequences after data import
+  FOR r IN 
+    SELECT 
+      sequence_name, 
+      table_name || '_' || column_name || '_seq' AS expected_sequence
+    FROM 
+      information_schema.columns
+    WHERE 
+      column_default LIKE 'nextval%'
+  LOOP
+    BEGIN
+      EXECUTE 'SELECT setval(''' || r.sequence_name || ''', (SELECT COALESCE(MAX(' || 
+              substring(r.expected_sequence from 1 for position('_seq' in r.expected_sequence)-1) || '), 1) FROM ' || 
+              substring(r.expected_sequence from 1 for position('_' in r.expected_sequence)-1) || '))';
+    EXCEPTION WHEN OTHERS THEN
+      -- Silently continue on error
+    END;
+  END LOOP;
+END \$\$;
+EOF
+
+  PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/fix_ownership.sql
+  log "INFO" "Ownership correction completed"
+  rm -f /tmp/fix_ownership.sql
+}
+
+# Function to set up the database - can be called directly when sourced
+setup_database() {
+  log "INFO" "Setting up PostgreSQL database..."
+  
+  # First: Check if the database has tables
+  TABLES_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
+  log "INFO" "Found $TABLES_COUNT tables in database schema"
+
+  if [ "$TABLES_COUNT" -gt 0 ]; then
+    log "INFO" "Database already has $TABLES_COUNT tables, checking for data..."
+    
+    # Check if there's actual data in a key table (assuming books table exists)
+    BOOKS_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
+    log "INFO" "Books table contains $BOOKS_COUNT records"
+    
+    if [ "$BOOKS_COUNT" -gt 0 ]; then
+      log "INFO" "Found $BOOKS_COUNT books in the database. Database is already populated, skipping migrations and data import."
+      SKIP_MIGRATIONS=true
+      SKIP_PGDUMP_DOWNLOAD=true
+    else
+      log "INFO" "Tables exist but no data found. Will apply pgdump for data import only."
+      SKIP_MIGRATIONS=true
+      SKIP_PGDUMP_DOWNLOAD=false
+    fi
   else
-    log "INFO" "Tables exist but no data found. Will apply pgdump for data import only."
-    SKIP_MIGRATIONS=true
+    log "INFO" "No tables found, will download and import PostgreSQL dump"
+    SKIP_MIGRATIONS=true # Skip SQL migrations, use pgdump instead
+    BOOKS_COUNT=0
     SKIP_PGDUMP_DOWNLOAD=false
   fi
-else
-  log "INFO" "No tables found, proceeding with migrations first, then data import"
-  SKIP_MIGRATIONS=false
-  BOOKS_COUNT=0
-  SKIP_PGDUMP_DOWNLOAD=false
-fi
-
-# First step: Apply migrations if needed
-if [ "$SKIP_MIGRATIONS" = false ]; then
-  log "INFO" "Applying migrations using 0001_init.sql"
-  # Apply the initial migration file explicitly
-  migration="/root/sql/migrations/0001_init.sql"
-  if [ -f "$migration" ]; then
-    log "INFO" "Applying migration: $migration"
-    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f "$migration" || { 
-      log "ERROR" "Migration $migration failed!"
-      exit 1
-    }
-    log "INFO" "Migration completed successfully"
-  else
-    log "ERROR" "Migration file $migration not found!"
-    exit 1
-  fi
-else
-  log "INFO" "Migrations skipped - database already exists with tables"
-fi
-
-# Second step: Download pgdump if needed
-if [ "$SKIP_PGDUMP_DOWNLOAD" = false ]; then
-  log "DEBUG" "R2 Environment Variables:"
-  log "DEBUG" "- R2_ENDPOINT_URL: '${R2_ENDPOINT_URL}'"
-  log "DEBUG" "- R2_BUCKET_NAME: '${R2_BUCKET_NAME}'"
-  log "DEBUG" "- R2_OBJECT_KEY_POSTGRES: '${R2_OBJECT_KEY_POSTGRES}'"
-  log "DEBUG" "- R2_ACCESS_KEY_ID: '${R2_ACCESS_KEY_ID:0:5}***'"
   
-  # Build the download URL from R2 variables
-  if [ -z "$R2_ENDPOINT_URL" ] || [ -z "$R2_BUCKET_NAME" ] || [ -z "$R2_OBJECT_KEY_POSTGRES" ]; then
-    log "ERROR" "One or more R2 environment variables are not set. Skipping database dump download."
-    log "ERROR" "Required: R2_ENDPOINT_URL, R2_BUCKET_NAME, R2_OBJECT_KEY_POSTGRES"
-    PGDUMP_IMPORT_SUCCESS=false
-  else
-    # Make sure endpoint URL has proper format
-    # Remove trailing slash if present
-    R2_ENDPOINT_URL_CLEANED=${R2_ENDPOINT_URL%/}
-    # Add https:// prefix if needed
-    if [[ "$R2_ENDPOINT_URL_CLEANED" != http* ]]; then
-      R2_ENDPOINT_URL_CLEANED="https://$R2_ENDPOINT_URL_CLEANED"
-    fi
+  # Third: Download and import data if needed
+  if [ "$SKIP_PGDUMP_DOWNLOAD" = false ]; then
+    log "INFO" "Downloading database dump from R2..."
     
-    # Construct the full URL (R2 format is typically endpoint/bucket/object)
-    DUMP_URL="${R2_ENDPOINT_URL_CLEANED}/${R2_BUCKET_NAME}/${R2_OBJECT_KEY_POSTGRES}"
-    
-    log "INFO" "Downloading database dump from R2: $DUMP_URL"
-    download_start=$(date +%s)
-    
-    # Check if we have AWS CLI available for authenticated downloads
-    if command -v aws &> /dev/null; then
-      log "INFO" "Using AWS CLI for authenticated download"
-      # AWS CLI is available, use it for authenticated S3 access
-      if AWS_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY \
-         aws --endpoint-url $R2_ENDPOINT_URL_CLEANED s3 cp \
-         s3://${R2_BUCKET_NAME}/${R2_OBJECT_KEY_POSTGRES} /tmp/bookdb_dump.sql; then
-        download_time=$(($(date +%s) - download_start))
-        dump_size=$(du -h /tmp/bookdb_dump.sql | cut -f1)
-        log "INFO" "Successfully downloaded database dump via AWS CLI (${dump_size}, took ${download_time}s)"
-        PGDUMP_IMPORT_SUCCESS=true
-      else
-        log "ERROR" "AWS CLI download failed, falling back to curl"
-        fallback_to_curl=true
-      fi
+    # Build the download URL from R2 variables
+    if [ -z "$R2_ENDPOINT_URL" ] || [ -z "$R2_BUCKET_NAME" ] || [ -z "$R2_OBJECT_KEY_POSTGRES" ]; then
+      log "ERROR" "One or more R2 environment variables are not set. Skipping database dump download."
+      log "ERROR" "Required: R2_ENDPOINT_URL, R2_BUCKET_NAME, R2_OBJECT_KEY_POSTGRES"
+      PGDUMP_IMPORT_SUCCESS=false
     else
-      log "INFO" "AWS CLI not available, using curl with authentication headers"
-      fallback_to_curl=true
-    fi
-    
-    # Fallback to curl if AWS CLI not available or failed
-    if [ "${fallback_to_curl:-false}" = true ]; then
-      # Generate current date in AWS format (required for authentication)
-      DATE=$(date -u +"%Y%m%dT%H%M%SZ")
-      DATE_SHORT=$(date -u +"%Y%m%d")
+      # Make sure endpoint URL has proper format
+      R2_ENDPOINT_URL_CLEANED=${R2_ENDPOINT_URL%/}
+      # Add https:// prefix if needed
+      if [[ "$R2_ENDPOINT_URL_CLEANED" != http* ]]; then
+        R2_ENDPOINT_URL_CLEANED="https://$R2_ENDPOINT_URL_CLEANED"
+      fi
       
-      # Only attempt authenticated download if credentials are provided
-      if [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ]; then
-        log "INFO" "Using curl with AWS v4 signature authentication"
+      # Download the database dump using curl with endpoint and object key directly
+      DUMP_URL="${R2_ENDPOINT_URL_CLEANED}/${R2_OBJECT_KEY_POSTGRES}"
+      log "INFO" "Downloading database dump from: $DUMP_URL"
+      
+      if curl -L --retry 3 --retry-delay 2 -f -o /tmp/bookdb_dump.sql "$DUMP_URL"; then
+        dump_size=$(du -h /tmp/bookdb_dump.sql | cut -f1)
+        log "INFO" "Successfully downloaded database dump (${dump_size})"
+        PGDUMP_IMPORT_SUCCESS=true
         
-        # Use curl with AWS authentication headers if keys are provided
-        # Create temporary headers file
-        HEADERS_FILE=$(mktemp)
+        # Preprocess the SQL dump to replace role references
+        log "INFO" "Preprocessing database dump to replace role references..."
+        # Create temporary copy for processing
+        cp /tmp/bookdb_dump.sql /tmp/bookdb_dump_original.sql
         
-        # Construct authentication headers using R2 credentials
-        echo "Host: ${R2_BUCKET_NAME}.${R2_ENDPOINT_URL#*//}" > $HEADERS_FILE
-        echo "X-Amz-Date: $DATE" >> $HEADERS_FILE
-        echo "X-Amz-Content-Sha256: UNSIGNED-PAYLOAD" >> $HEADERS_FILE
-        echo "Authorization: AWS4-HMAC-SHA256 Credential=${R2_ACCESS_KEY_ID}/${DATE_SHORT}/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=dummy" >> $HEADERS_FILE
+        # Replace role references and other potential issues
+        sed -i 's/role "yamirghofran0"/role "'$DB_USER'"/g' /tmp/bookdb_dump.sql
+        sed -i 's/yamirghofran0/'$DB_USER'/g' /tmp/bookdb_dump.sql
+        sed -i '/^SET transaction_timeout/d' /tmp/bookdb_dump.sql  # Remove unrecognized parameter
         
-        if curl -L --retry 3 --retry-delay 2 -f -o /tmp/bookdb_dump.sql -H "@$HEADERS_FILE" "$DUMP_URL"; then
-          download_time=$(($(date +%s) - download_start))
-          dump_size=$(du -h /tmp/bookdb_dump.sql | cut -f1)
-          log "INFO" "Successfully downloaded database dump with auth headers (${dump_size}, took ${download_time}s)"
-          PGDUMP_IMPORT_SUCCESS=true
+        log "INFO" "Preprocessed database dump. Importing..."
+        
+        # Import the SQL dump with owner reassignment
+        if PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -v ON_ERROR_STOP=0 -f /tmp/bookdb_dump.sql; then
+          log "INFO" "Database import completed successfully"
+          
+          # Fix ownership of database objects
+          fix_ownership
         else
-          log "WARN" "Authenticated download failed with status: $?, trying unauthenticated as fallback"
-          # Try unauthenticated as a last resort
-          if curl -L --retry 3 --retry-delay 2 -f -o /tmp/bookdb_dump.sql "$DUMP_URL"; then
-            download_time=$(($(date +%s) - download_start))
-            dump_size=$(du -h /tmp/bookdb_dump.sql | cut -f1)
-            log "INFO" "Successfully downloaded database dump without auth (${dump_size}, took ${download_time}s)"
-            PGDUMP_IMPORT_SUCCESS=true
+          log "WARN" "Database import had errors, trying with session_replication_role = 'replica'..."
+          # Try importing with triggers disabled
+          PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'replica';"
+          PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -v ON_ERROR_STOP=0 -f /tmp/bookdb_dump.sql
+          PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'origin';"
+          
+          log "INFO" "Checking if tables were created successfully..."
+          TABLES_COUNT_AFTER=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
+          log "INFO" "Found $TABLES_COUNT_AFTER tables after import"
+          
+          if [ "$TABLES_COUNT_AFTER" -gt 0 ]; then
+            log "INFO" "Tables were created despite errors, continuing..."
+            
+            # Fix ownership of database objects even after partial success
+            fix_ownership
           else
-            log "ERROR" "Failed to download database dump (HTTP status: $?), continuing without import"
-            PGDUMP_IMPORT_SUCCESS=false
+            log "ERROR" "Failed to create tables. Creating schema from 0001_init.sql as fallback..."
+            # Apply the initial migration file as fallback
+            migration="./sql/migrations/0001_init.sql"
+            if [ -f "$migration" ]; then
+              PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f "$migration"
+              log "INFO" "Applied fallback migration"
+            else
+              log "ERROR" "Migration file $migration not found! Database setup may be incomplete."
+            fi
           fi
         fi
         
-        # Remove temporary headers file
-        rm -f $HEADERS_FILE
+        # Clean up
+        rm -f /tmp/bookdb_dump.sql /tmp/bookdb_dump_original.sql
       else
-        log "WARN" "R2 credentials not provided, attempting unauthenticated download"
-        # Try unauthenticated download as fallback
-        if curl -L --retry 3 --retry-delay 2 -f -o /tmp/bookdb_dump.sql "$DUMP_URL"; then
-          download_time=$(($(date +%s) - download_start))
-          dump_size=$(du -h /tmp/bookdb_dump.sql | cut -f1)
-          log "INFO" "Successfully downloaded database dump without auth (${dump_size}, took ${download_time}s)"
-          PGDUMP_IMPORT_SUCCESS=true
-        else
-          log "ERROR" "Failed to download database dump (HTTP status: $?), continuing without import"
-          PGDUMP_IMPORT_SUCCESS=false
-        fi
+        log "ERROR" "Failed to download database dump, continuing without import"
+        PGDUMP_IMPORT_SUCCESS=false
       fi
     fi
+  else
+    log "INFO" "Skipping database dump download - database already populated"
+    PGDUMP_IMPORT_SUCCESS=false
   fi
-else
-  log "INFO" "Skipping pgdump download - database already populated"
-  PGDUMP_IMPORT_SUCCESS=false
-fi
+  
+  log "INFO" "Database setup completed successfully"
+}
 
-# Third step: Import the database dump if download was successful
-if [ "$PGDUMP_IMPORT_SUCCESS" = true ] && [ -f "/tmp/bookdb_dump.sql" ]; then
-  log "INFO" "Preparing database dump by fixing ownership issues"
+# Main script execution - only runs if not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  log "INFO" "Starting PostgreSQL entrypoint script"
+  log "INFO" "Environment: APP_ENV=${APP_ENV:-unknown}"
+  log "INFO" "Database Connection: ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
   
-  # First attempt to create the user if it doesn't exist
-  log "INFO" "Attempting to create the 'yamirghofran0' user if it doesn't exist"
-  PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "DO \$\$ 
-  BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='yamirghofran0') THEN
-      CREATE ROLE yamirghofran0 WITH LOGIN PASSWORD 'temp_password';
-    END IF;
-  END \$\$;" || log "WARN" "Could not create role, will proceed with substitution"
-  
-  # Create a modified version of the dump with substituted ownership
-  log "INFO" "Creating a modified version of the dump file with current database user ownership"
-  sed "s/yamirghofran0/$DB_USER/g" /tmp/bookdb_dump.sql > /tmp/bookdb_dump_modified.sql
-  
-  log "INFO" "Importing modified database dump"
-  import_start=$(date +%s)
-  if PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/bookdb_dump_modified.sql; then
-    import_time=$(($(date +%s) - import_start))
-    log "INFO" "Database import completed successfully in ${import_time}s"
-    # Verify import by counting books
-    BOOKS_COUNT_AFTER=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
-    log "INFO" "Books table now contains $BOOKS_COUNT_AFTER records (added $((BOOKS_COUNT_AFTER - BOOKS_COUNT)))"
-  else
-    log "WARN" "Database import had errors. Attempting alternative approach with disable/enable triggers"
-    
-    # Try importing with triggers disabled
-    log "INFO" "Disabling triggers before import"
-    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'replica';"
-    
-    log "INFO" "Importing with triggers disabled"
-    import_start=$(date +%s)
-    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/bookdb_dump_modified.sql
-    import_result=$?
-    import_time=$(($(date +%s) - import_start))
-    
-    if [ $import_result -eq 0 ]; then
-      log "INFO" "Database import with disabled triggers completed in ${import_time}s"
-    else
-      log "ERROR" "Import still failed with exit code $import_result, continuing anyway"
+  log "INFO" "Waiting for PostgreSQL to be ready at ${DB_HOST}:${DB_PORT}..."
+  start_time=$(date +%s)
+  until PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SELECT 1" > /dev/null 2>&1; do
+    elapsed=$(($(date +%s) - start_time))
+    log "WARN" "PostgreSQL is unavailable (waited ${elapsed}s) - sleeping for 2 seconds"
+    sleep 2
+    # Fail if we've waited too long (5 minutes)
+    if [ $elapsed -gt 300 ]; then
+      log "ERROR" "Timed out waiting for PostgreSQL after ${elapsed} seconds"
+      exit 1
     fi
-    
-    log "INFO" "Re-enabling triggers"
-    PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'origin';"
-    
-    # Verify import by counting books
-    BOOKS_COUNT_AFTER=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
-    log "INFO" "Books table now contains $BOOKS_COUNT_AFTER records (added $((BOOKS_COUNT_AFTER - BOOKS_COUNT)))"
-  fi
+  done
+  log "INFO" "PostgreSQL is up after $(($(date +%s) - start_time)) seconds - proceeding with setup"
   
-  # Cleanup temp files
-  log "INFO" "Cleaning up temporary files"
-  rm -f /tmp/bookdb_dump.sql /tmp/bookdb_dump_modified.sql
-else
-  if [ "$SKIP_PGDUMP_DOWNLOAD" = true ]; then
-    log "INFO" "Skipping database import - database already populated"
-  else
-    log "INFO" "Skipping database import - no dump file was found or download failed"
-  fi
-fi
+  # Call the setup_database function to check tables and set appropriate flags
+  setup_database
+
+# The setup_database function has already handled all aspects of the database initialization
+
+# Final status information for logging
+BOOKS_COUNT_AFTER=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
 
 log "INFO" "Database setup complete, starting server"
 log "INFO" "Runtime summary:"
@@ -256,4 +225,6 @@ log "INFO" "- Migrations Applied: $(if [ "$SKIP_MIGRATIONS" = false ]; then echo
 log "INFO" "- Data Import Status: $(if [ "$PGDUMP_IMPORT_SUCCESS" = true ]; then echo "Success"; else echo "Skipped/Failed"; fi)"
 log "INFO" "- Database Version: $(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT version();" | tr -d ' ' | tr '\n' ' ')"
 
-exec ./server
+  # Execute the server only if this script is run directly, not sourced
+  exec ./server
+fi

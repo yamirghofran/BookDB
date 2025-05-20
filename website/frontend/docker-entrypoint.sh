@@ -6,9 +6,11 @@ if [ -z "$BACKEND_SERVICE" ]; then
   exit 1
 fi
 
+# QDRANT_SERVICE is no longer required as backend handles Qdrant communication
+# Setting a default value for backwards compatibility with existing templates
 if [ -z "$QDRANT_SERVICE" ]; then
-  echo "ERROR: QDRANT_SERVICE environment variable must be set"
-  exit 1
+  echo "INFO: QDRANT_SERVICE not set, using default value (not used in this configuration)"
+  export QDRANT_SERVICE="bookdb-qdrant-dev"
 fi
 
 # Set default values only for optional environment variables
