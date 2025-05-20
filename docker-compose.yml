@@ -127,6 +127,16 @@ services:
     networks:
       - backend-network
       - cloudflared
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # Install curl during container initialization so it's available for healthchecks
+    command: >
+      sh -c "apt-get update && apt-get install -y curl && 
+      /qdrant/entrypoint.sh"
 
 volumes:
   postgres_data:
