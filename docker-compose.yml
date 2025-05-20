@@ -39,11 +39,11 @@ services:
       - DB_PORT=5432
       - DB_USER=${POSTGRES_USER:-bookdb}
       - DB_PASSWORD=${POSTGRES_PASSWORD:-bookdb_password}
-      - DB_NAME=${POSTGRES_DB:-bookdb}
-      # Qdrant configuration
+      - DB_NAME=${POSTGRES_DB:-bookdb} # Qdrant configuration
       - QDRANT_HOST=bookdb-qdrant
-      - QDRANT_PORT=6333
-      - QDRANT_HTTP_VERSION=1.1 # Force HTTP/1.1 compatibility
+      - QDRANT_PORT=6333 # HTTP port for health checks
+      - QDRANT_GRPC_PORT=6334 # gRPC port for all operations
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
       # Application settings
       - APP_ENV=${APP_ENV:-production}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -107,7 +107,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - backend-network  # Qdrant vector database
+      - backend-network # Qdrant vector database
   qdrant:
     image: qdrant/qdrant:latest
     container_name: bookdb-qdrant

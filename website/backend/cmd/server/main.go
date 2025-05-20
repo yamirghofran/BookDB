@@ -5,10 +5,12 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	// Replace pgx with pgxpool for connection pooling
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/qdrant/go-client/qdrant"
 
 	"github.com/yamirghofran/BookDB/internal/api"
 	"github.com/yamirghofran/BookDB/internal/db"
@@ -87,12 +89,34 @@ func main() {
 			qdrantPort = portVal
 		}
 	}
-	
 	log.Printf("Connecting to Qdrant at %s:%d", qdrantHost, qdrantPort)
-	qdrantClient, err := createQdrantRestClient(qdrantHost, qdrantPort)
-	if err != nil {
-		log.Fatalf("FATAL: Error creating Qdrant client: %v", err)
+	
+	// Wait for Qdrant to be ready
+	log.Printf("Waiting for Qdrant to be ready...")
+	retries := 0
+	maxRetries := 15
+	connected := false
+	var qdrantClient *qdrant.Client
+	
+	for retries < maxRetries {
+		qdrantClient, err = createQdrantClient(qdrantHost, qdrantPort)
+		if err != nil {
+			log.Printf("Attempt %d: Error creating Qdrant client: %v", retries+1, err)
+			retries++
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		
+		// Connection and health check are handled inside createQdrantClient now
+		connected = true
+		break
 	}
+	
+	if !connected {
+		log.Fatalf("FATAL: Failed to connect to Qdrant after %d attempts", maxRetries)
+	}
+	
+	log.Printf("Successfully connected to Qdrant")
 	defer qdrantClient.Close()
 	// Create the DB queries instance using the connection pool
 	queries := db.New(dbPool)
