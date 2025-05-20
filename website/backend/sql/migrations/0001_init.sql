@@ -189,30 +189,3 @@ CREATE TRIGGER tsvectorupdate_book_authors
     AFTER INSERT OR DELETE OR UPDATE ON BookAuthors
 FOR EACH ROW EXECUTE FUNCTION update_book_search_on_author_change();
 
-
--- +goose Down
--- Drop triggers first
-DROP TRIGGER IF EXISTS tsvectorupdate_book_authors ON BookAuthors;
-DROP TRIGGER IF EXISTS tsvectorupdate_book ON Books;
-
--- Drop trigger functions
-DROP FUNCTION IF EXISTS update_book_search_on_author_change();
-DROP FUNCTION IF EXISTS update_book_search_vector();
-
--- Drop tables in reverse order of creation (considering dependencies)
-DROP TABLE IF EXISTS ActivityLogs;
-DROP TABLE IF EXISTS UserLibrary;
-DROP TABLE IF EXISTS Reviews;
-DROP TABLE IF EXISTS SimilarBooks;
-DROP TABLE IF EXISTS BookGenres;
-DROP TABLE IF EXISTS BookAuthors;
-DROP TABLE IF EXISTS Books;
-DROP TABLE IF EXISTS Genres;
-DROP TABLE IF EXISTS Authors;
-DROP TABLE IF EXISTS Users;
-
--- Drop custom types
-DROP TYPE IF EXISTS user_activity_type;
-
--- Drop extensions created in this migration
-DROP EXTENSION IF EXISTS "uuid-ossp";
