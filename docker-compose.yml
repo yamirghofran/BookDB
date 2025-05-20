@@ -85,7 +85,7 @@ services:
       - POSTGRES_INITDB_ARGS=--data-checksums
       - POSTGRES_INITDB_WALDIR=/var/lib/postgresql/wal
       # PostgreSQL configuration parameters
-      - POSTGRES_SHARED_BUFFERS=256MB
+      - POSTGRES_SHARED_BUFFERS=512MB
       - POSTGRES_MAX_WAL_SIZE=2GB
       - POSTGRES_MIN_WAL_SIZE=1GB
       - POSTGRES_CHECKPOINT_TIMEOUT=5min

@@ -188,9 +188,38 @@ setup_database() {
   log "INFO" "Database setup completed successfully"
 }
 
+# Function to apply PostgreSQL configuration
+apply_postgres_config() {
+  log "INFO" "Applying PostgreSQL configuration optimizations..."
+  
+  # Create temporary config file
+  cat > /tmp/postgres_optimize.sql << EOF
+-- Increase WAL size to reduce checkpoint frequency
+ALTER SYSTEM SET max_wal_size = '2GB';  -- Default is often 1GB
+
+-- Autovacuum tuning
+ALTER SYSTEM SET autovacuum_vacuum_scale_factor = 0.05;  -- Default 0.2
+ALTER SYSTEM SET autovacuum_analyze_scale_factor = 0.025; -- Default 0.1
+ALTER SYSTEM SET autovacuum_vacuum_cost_delay = 2; -- Default 20ms
+ALTER SYSTEM SET autovacuum_vacuum_cost_limit = 1000; -- Default 200
+
+-- General performance settings
+ALTER SYSTEM SET maintenance_work_mem = '256MB'; -- For vacuum operations
+ALTER SYSTEM SET work_mem = '16MB'; -- For query operations
+
+-- Apply changes
+SELECT pg_reload_conf();
+EOF
+
+  # Apply the configuration
+  PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/postgres_optimize.sql
+  log "INFO" "PostgreSQL configuration optimized"
+  rm -f /tmp/postgres_optimize.sql
+}
+
 # Main script execution - only runs if not sourced
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  log "INFO" "Starting PostgreSQL entrypoint script"
+  log "INFO" "Starting PostgreSQL entrypoint script" 
   log "INFO" "Environment: APP_ENV=${APP_ENV:-unknown}"
   log "INFO" "Database Connection: ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
   
@@ -212,6 +241,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   setup_database
 
 # The setup_database function has already handled all aspects of the database initialization
+
+# Apply PostgreSQL configuration optimizations
+apply_postgres_config
 
 # Final status information for logging
 BOOKS_COUNT_AFTER=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')

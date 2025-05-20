@@ -80,7 +80,7 @@ services:
       - POSTGRES_PASSWORD=bookdb_dev_password
       - POSTGRES_DB=bookdb_dev
       # Development-optimized PostgreSQL settings
-      - POSTGRES_SHARED_BUFFERS=128MB
+      - POSTGRES_SHARED_BUFFERS=512MB
     restart: unless-stopped
     networks:
       - app_network
