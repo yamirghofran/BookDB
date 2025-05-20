@@ -29,138 +29,70 @@ else
   log "INFO" "SERVICE_TYPE not set or unrecognized. Starting with auto-configuration..."
   
   # ===== Check PostgreSQL =====
-  log "INFO" "Waiting for PostgreSQL to be ready at ${DB_HOST}:${DB_PORT}..."
-  start_time=$(date +%s)
-  until PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SELECT 1" > /dev/null 2>&1; do
-    elapsed=$(($(date +%s) - start_time))
-    log "WARN" "PostgreSQL is unavailable (waited ${elapsed}s) - sleeping for 2 seconds"
-    sleep 2
-    # Fail if we've waited too long (5 minutes)
-    if [ $elapsed -gt 60 ]; then
-      log "ERROR" "Timed out waiting for PostgreSQL after ${elapsed} seconds"
-      exit 1
-    fi
-  done
-  log "INFO" "PostgreSQL is up after $(($(date +%s) - start_time)) seconds"
-  
-  # Check if database tables already exist
-  log "INFO" "Checking if database tables already exist..."
-  TABLES_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
-  log "INFO" "Found $TABLES_COUNT tables in database schema"
-  
-  if [ "$TABLES_COUNT" -gt 0 ]; then
-    log "INFO" "Database already has $TABLES_COUNT tables, checking for data..."
-    
-    # Check if there's actual data in a key table (assuming books table exists)
-    BOOKS_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
-    log "INFO" "Books table contains $BOOKS_COUNT records"
-    
-    if [ "$BOOKS_COUNT" -gt 0 ]; then
-      log "INFO" "Found $BOOKS_COUNT books in the database. Database is already populated, skipping SQL setup."
-      SKIP_SQL_SETUP=true
-    else
-      log "INFO" "Tables exist but no data found. Will set up database data."
-      SKIP_SQL_SETUP=false
-    fi
+  log "INFO" "Checking PostgreSQL connectivity at ${DB_HOST}:${DB_PORT}..."
+  # Make sure all variables are properly defined before using them
+  if [ -z "$DB_HOST" ] || [ -z "$DB_PORT" ] || [ -z "$DB_USER" ] || [ -z "$DB_NAME" ]; then
+    log "ERROR" "Missing required database connection parameters"
+    log "ERROR" "DB_HOST=${DB_HOST:-not set}, DB_PORT=${DB_PORT:-not set}, DB_USER=${DB_USER:-not set}, DB_NAME=${DB_NAME:-not set}"
+    log "WARN" "Continuing without PostgreSQL connection"
+    POSTGRES_AVAILABLE=false
   else
-    log "INFO" "No tables found. Will download and import PostgreSQL dump."
-    SKIP_SQL_SETUP=false
-  fi
-  
-  # Set up database if needed
-  if [ "$SKIP_SQL_SETUP" = false ]; then
-    log "INFO" "Setting up PostgreSQL database..."
+    # Try to connect to PostgreSQL with timeout (5 attempts)
+    POSTGRES_AVAILABLE=false
+    for i in {1..5}; do
+      if PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1" > /dev/null 2>&1; then
+        log "INFO" "PostgreSQL is available"
+        POSTGRES_AVAILABLE=true
+        break
+      fi
+      log "WARN" "PostgreSQL is unavailable - attempt ${i}/5"
+      sleep 2
+    done
     
-    # Source the functions from PostgreSQL entrypoint script using relative path
-    source ./postgres_entrypoint.sh
-    
-    # Set up the database
-    setup_database
-    
-    log "INFO" "PostgreSQL database setup completed"
+    if [ "$POSTGRES_AVAILABLE" = false ]; then
+      log "WARN" "Could not connect to PostgreSQL after 5 attempts, continuing without database connection"
+    fi
   fi
   
   # ===== Check Qdrant =====
-  # Always use HTTP port (6333) for health checks, regardless of what QDRANT_PORT is set to
-  log "INFO" "Waiting for Qdrant to be ready at http://${QDRANT_HOST}:6333..."
-  start_time=$(date +%s)
-  QDRANT_AVAILABLE=true
-  until curl -s "http://${QDRANT_HOST}:6333/healthz" | grep -q "{\s*\"status\"\s*:\s*\"ok\"\s*}" > /dev/null 2>&1; do
-    elapsed=$(($(date +%s) - start_time))
-    log "WARN" "Qdrant is unavailable (waited ${elapsed}s) - sleeping for 2 seconds"
-    sleep 2
-    # If we've waited too long (1 minute), continue without Qdrant setup
-    if [ $elapsed -gt 60 ]; then
-      log "ERROR" "Timed out waiting for Qdrant after ${elapsed} seconds, continuing without Qdrant setup"
-      QDRANT_AVAILABLE=false
-      SKIP_QDRANT_SETUP=true
+  log "INFO" "Checking Qdrant connectivity at http://${QDRANT_HOST}:6333..."
+  # Always use HTTP port (6333) for health checks
+  QDRANT_AVAILABLE=false
+  
+  # Simple check for connectivity with a timeout
+  for i in {1..5}; do
+    RESPONSE=$(curl -s --max-time 5 "http://${QDRANT_HOST}:6333/healthz")
+    if echo "$RESPONSE" | grep -q "healthz check passed"; then
+      log "INFO" "Qdrant is available"
+      QDRANT_AVAILABLE=true
       break
     fi
+    log "WARN" "Qdrant is unavailable - attempt ${i}/5"
+    sleep 2
   done
   
-  if [ "$QDRANT_AVAILABLE" = true ]; then
-    log "INFO" "Qdrant is up after $(($(date +%s) - start_time)) seconds"
+  if [ "$QDRANT_AVAILABLE" = false ]; then
+    log "WARN" "Could not connect to Qdrant after 5 attempts, continuing without Qdrant connection"
   fi
   
-  # Only check collections if Qdrant is available
-  if [ "$QDRANT_AVAILABLE" = true ]; then
-    # Check if collections already exist
-    log "INFO" "Checking if collections already exist in Qdrant..."
-    collection_response=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT}/collections/list")
-    log "DEBUG" "Collection list response: $collection_response"
-    
-    COLLECTIONS_EXIST=$(echo "$collection_response" | grep -q "sbert_books\|gmf_users\|gmf_books" && echo "true" || echo "false")
-    
-    if [ "$COLLECTIONS_EXIST" = "true" ]; then
-      log "INFO" "Qdrant collections already exist, checking for data..."
-      
-      # Get detailed info for logging
-      collections_found=$(echo "$collection_response" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')
-      log "INFO" "Found collections: $collections_found"
-      
-      # Check if there's actual data in the collections
-      sbert_response=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT}/collections/sbert_books")
-      SBERT_COUNT=$(echo "$sbert_response" | grep -o '"vectors_count":[0-9]*' | cut -d':' -f2)
-      
-      if [ -z "$SBERT_COUNT" ]; then
-        log "WARN" "Could not determine vector count for sbert_books collection"
-        SBERT_COUNT=0
-      fi
-      
-      log "INFO" "SBERT books vectors count: $SBERT_COUNT"
-      
-      if [ "$SBERT_COUNT" -gt 0 ]; then
-        log "INFO" "Found $SBERT_COUNT vectors in Qdrant collections. Embeddings already loaded, skipping setup."
-        SKIP_QDRANT_SETUP=true
-      else
-        log "INFO" "Collections exist but no data found. Will set up Qdrant data."
-        SKIP_QDRANT_SETUP=false
-      fi
-    else
-      log "INFO" "No collections found. Will set up Qdrant collections and data."
-      SKIP_QDRANT_SETUP=false
-    fi
-  else
-    log "INFO" "Qdrant is unavailable. Skipping Qdrant setup."
-    SKIP_QDRANT_SETUP=true
+  # ===== Setup services =====
+  # Setup PostgreSQL if available
+  if [ "$POSTGRES_AVAILABLE" = true ]; then
+    log "INFO" "Setting up PostgreSQL database..."
+    source ./postgres_entrypoint.sh
+    setup_database
+    log "INFO" "PostgreSQL database setup completed"
   fi
   
-  # Set up Qdrant if needed and available
-  if [ "$SKIP_QDRANT_SETUP" = false ] && [ "$QDRANT_AVAILABLE" = true ]; then
+  # Setup Qdrant if available
+  if [ "$QDRANT_AVAILABLE" = true ]; then
     log "INFO" "Setting up Qdrant embeddings..."
-    
-    # Source the functions from Qdrant entrypoint script using relative path
     source ./qdrant_entrypoint.sh
-    
-    # Set up Qdrant
     setup_qdrant
-    
     log "INFO" "Qdrant setup completed"
-  else
-    log "INFO" "Skipping Qdrant setup - ${QDRANT_AVAILABLE:+Qdrant is $([ "$QDRANT_AVAILABLE" = true ] && echo "available" || echo "unavailable"), }setup is not needed or was skipped"
   fi
   
-  log "INFO" "Database auto-configuration completed. Starting server..."
+  log "INFO" "Service auto-configuration completed. Starting server..."
   log "INFO" "Running server on port: ${PORT:-8080}"
   exec ./server
 fi

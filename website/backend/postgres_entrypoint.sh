@@ -64,7 +64,7 @@ BEGIN
 END \$\$;
 EOF
 
-  PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/fix_ownership.sql
+  PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /tmp/fix_ownership.sql
   log "INFO" "Ownership correction completed"
   rm -f /tmp/fix_ownership.sql
 }
@@ -74,14 +74,14 @@ setup_database() {
   log "INFO" "Setting up PostgreSQL database..."
   
   # First: Check if the database has tables
-  TABLES_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
+  TABLES_COUNT=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
   log "INFO" "Found $TABLES_COUNT tables in database schema"
 
   if [ "$TABLES_COUNT" -gt 0 ]; then
     log "INFO" "Database already has $TABLES_COUNT tables, checking for data..."
     
     # Check if there's actual data in a key table (assuming books table exists)
-    BOOKS_COUNT=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
+    BOOKS_COUNT=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
     log "INFO" "Books table contains $BOOKS_COUNT records"
     
     if [ "$BOOKS_COUNT" -gt 0 ]; then
@@ -139,7 +139,7 @@ setup_database() {
         log "INFO" "Preprocessed database dump. Importing..."
         
         # Import the SQL dump with owner reassignment
-        if PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -v ON_ERROR_STOP=0 -f /tmp/bookdb_dump.sql; then
+        if PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=0 -f /tmp/bookdb_dump.sql; then
           log "INFO" "Database import completed successfully"
           
           # Fix ownership of database objects
@@ -147,12 +147,12 @@ setup_database() {
         else
           log "WARN" "Database import had errors, trying with session_replication_role = 'replica'..."
           # Try importing with triggers disabled
-          PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'replica';"
-          PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -v ON_ERROR_STOP=0 -f /tmp/bookdb_dump.sql
-          PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SET session_replication_role = 'origin';"
+          PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SET session_replication_role = 'replica';"
+          PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=0 -f /tmp/bookdb_dump.sql
+          PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SET session_replication_role = 'origin';"
           
           log "INFO" "Checking if tables were created successfully..."
-          TABLES_COUNT_AFTER=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
+          TABLES_COUNT_AFTER=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
           log "INFO" "Found $TABLES_COUNT_AFTER tables after import"
           
           if [ "$TABLES_COUNT_AFTER" -gt 0 ]; then
@@ -165,7 +165,7 @@ setup_database() {
             # Apply the initial migration file as fallback
             migration="./sql/migrations/0001_init.sql"
             if [ -f "$migration" ]; then
-              PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f "$migration"
+              PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$migration"
               log "INFO" "Applied fallback migration"
             else
               log "ERROR" "Migration file $migration not found! Database setup may be incomplete."
@@ -212,7 +212,7 @@ SELECT pg_reload_conf();
 EOF
 
   # Apply the configuration
-  PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -f /tmp/postgres_optimize.sql
+  PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f /tmp/postgres_optimize.sql
   log "INFO" "PostgreSQL configuration optimized"
   rm -f /tmp/postgres_optimize.sql
 }
@@ -223,9 +223,18 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   log "INFO" "Environment: APP_ENV=${APP_ENV:-unknown}"
   log "INFO" "Database Connection: ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
   
-  log "INFO" "Waiting for PostgreSQL to be ready at ${DB_HOST}:${DB_PORT}..."
+  log "INFO" "Waiting for PostgreSQL to be ready at ${DB_HOST}:${DB_PORT} with user ${DB_USER}..."
   start_time=$(date +%s)
-  until PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -c "SELECT 1" > /dev/null 2>&1; do
+  
+  # Make sure all variables are properly defined before using them
+  if [ -z "$DB_HOST" ] || [ -z "$DB_PORT" ] || [ -z "$DB_USER" ] || [ -z "$DB_NAME" ]; then
+    log "ERROR" "Missing required database connection parameters"
+    log "ERROR" "DB_HOST=${DB_HOST:-not set}, DB_PORT=${DB_PORT:-not set}, DB_USER=${DB_USER:-not set}, DB_NAME=${DB_NAME:-not set}"
+    exit 1
+  fi
+  
+  # Fixed psql command with properly quoted parameters
+  until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1" > /dev/null 2>&1; do
     elapsed=$(($(date +%s) - start_time))
     log "WARN" "PostgreSQL is unavailable (waited ${elapsed}s) - sleeping for 2 seconds"
     sleep 2
@@ -246,7 +255,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 apply_postgres_config
 
 # Final status information for logging
-BOOKS_COUNT_AFTER=$(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
+BOOKS_COUNT_AFTER=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM books;" 2>/dev/null || echo "0" | tr -d ' ')
 
 log "INFO" "Database setup complete, starting server"
 log "INFO" "Runtime summary:"
@@ -255,7 +264,7 @@ log "INFO" "- Initial Books Count: $BOOKS_COUNT"
 log "INFO" "- Final Books Count: ${BOOKS_COUNT_AFTER:-$BOOKS_COUNT}"
 log "INFO" "- Migrations Applied: $(if [ "$SKIP_MIGRATIONS" = false ]; then echo "Yes"; else echo "No"; fi)"
 log "INFO" "- Data Import Status: $(if [ "$PGDUMP_IMPORT_SUCCESS" = true ]; then echo "Success"; else echo "Skipped/Failed"; fi)"
-log "INFO" "- Database Version: $(PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME -t -c "SELECT version();" | tr -d ' ' | tr '\n' ' ')"
+log "INFO" "- Database Version: $(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT version();" | tr -d ' ' | tr '\n' ' ')"
 
   # Execute the server only if this script is run directly, not sourced
   exec ./server

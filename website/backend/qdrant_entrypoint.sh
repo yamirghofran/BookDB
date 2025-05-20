@@ -13,37 +13,15 @@ log() {
 setup_qdrant() {
   log "INFO" "Setting up Qdrant embeddings..."
   
-  # Check if we need to download embeddings
-  if [ "$SKIP_EMBEDDING_DOWNLOAD" = false ]; then
-    log "INFO" "Downloading embeddings from R2..."
-    
-    # Download code...
-    # (This part remains as-is - the existing code for downloading and importing embeddings)
-    
-    log "INFO" "Embeddings downloaded and imported successfully"
-  else
-    log "INFO" "Skipping embedding download - collections already populated"
-  fi
-  
-  log "INFO" "Qdrant setup completed successfully"
-}
-
-# Main script execution - only runs if not sourced
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  log "INFO" "Starting Qdrant embedding uploader..."
-  log "INFO" "Environment: APP_ENV=${APP_ENV:-unknown}"
-  log "INFO" "Qdrant connection: ${QDRANT_HOST}:${QDRANT_PORT}"
-  log "INFO" "R2 Endpoint: ${R2_ENDPOINT_URL:-not set}"
-  
-  # Wait for Qdrant to be ready - always use HTTP port 6333 for health checks
-  log "INFO" "Waiting for Qdrant to be ready at http://${QDRANT_HOST}:6333..."
+  # Wait for Qdrant to be ready
+  log "INFO" "Waiting for Qdrant to be ready at http://${QDRANT_HOST}:${QDRANT_PORT:-6333}..."
   start_time=$(date +%s)
   QDRANT_AVAILABLE=true
-  until curl -s "http://${QDRANT_HOST}:6333/healthz" | grep -q "{\s*\"status\"\s*:\s*\"ok\"\s*}" > /dev/null 2>&1; do
+  until response=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT:-6333}/healthz") && echo "$response" | grep -q "healthz check passed"; do
+    log "DEBUG" "Health check response: '${response}'"
     elapsed=$(($(date +%s) - start_time))
     log "WARN" "Qdrant is unavailable (waited ${elapsed}s) - sleeping for 2 seconds"
     sleep 2
-    # If we've waited too long (5 minutes), continue without setup
     if [ $elapsed -gt 300 ]; then
       log "ERROR" "Timed out waiting for Qdrant after ${elapsed} seconds"
       log "INFO" "Continuing without Qdrant setup..."
@@ -54,278 +32,135 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   
   if [ "$QDRANT_AVAILABLE" = false ]; then
     log "WARN" "Qdrant is not available. Skipping embedding upload."
-    exit 0
+    return 1
   fi
   
   log "INFO" "Qdrant is up after $(($(date +%s) - start_time)) seconds - proceeding with embedding upload"
   
-  # Check if the collections already exist
-  log "INFO" "Checking if collections already exist in Qdrant..."
-collection_response=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT}/collections/list")
-log "DEBUG" "Collection list response: $collection_response"
+  # Check for existing collections
+  log "INFO" "Checking for existing Qdrant collections..."
+  collection_response=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT:-6333}/collections")
+  log "DEBUG" "Collection list response: $collection_response"
 
-COLLECTIONS_EXIST=$(echo "$collection_response" | grep -q "sbert_books\|gmf_users\|gmf_books" && echo "true" || echo "false")
+  COLLECTIONS_EXIST=$(echo "$collection_response" | grep -q "sbert_books\|gmf_users\|gmf_book_embeddings" && echo "true" || echo "false")
 
-if [ "$COLLECTIONS_EXIST" = "true" ]; then
-  log "INFO" "Qdrant collections already exist, checking for data..."
-  
-  # Get detailed info for logging
-  collections_found=$(echo "$collection_response" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')
-  log "INFO" "Found collections: $collections_found"
-  
-  # Check if there's actual data in the collections
-  sbert_response=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT}/collections/sbert_books")
-  SBERT_COUNT=$(echo "$sbert_response" | grep -o '"vectors_count":[0-9]*' | cut -d':' -f2)
-  
-  if [ -z "$SBERT_COUNT" ]; then
-    log "WARN" "Could not determine vector count for sbert_books collection"
-    SBERT_COUNT=0
-  fi
-  
-  log "INFO" "SBERT books vectors count: $SBERT_COUNT"
-  
-  if [ "$SBERT_COUNT" -gt 0 ]; then
-    log "INFO" "Found $SBERT_COUNT vectors in Qdrant collections. Embeddings already loaded, skipping upload."
-    SKIP_EMBEDDING_DOWNLOAD=true
-  else
-    log "INFO" "Collections exist but no data found. Will download and upload embeddings."
-    SKIP_EMBEDDING_DOWNLOAD=false
-  fi
-else
-  log "INFO" "No collections found, proceeding with embedding download and upload"
-  SKIP_EMBEDDING_DOWNLOAD=false
-fi
-
-# Function for downloading files with authentication
-download_file() {
-  local source_url="$1"
-  local dest_file="$2"
-  local file_label="$3"
-  
-  download_start=$(date +%s)
-  log "INFO" "Downloading $file_label from: $source_url"
-  
-  # Check if we have AWS CLI available for authenticated downloads
-  if command -v aws &> /dev/null && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ]; then
-    log "DEBUG" "Using AWS CLI for authenticated download of $file_label"
+  if [ "$COLLECTIONS_EXIST" = "true" ]; then
+    collections_found=$(echo "$collection_response" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ')
+    log "INFO" "Found existing collections: $collections_found"
     
-    # Extract bucket and key from the URL
-    local bucket=$(echo "$source_url" | awk -F/ '{print $4}')
-    local key=$(echo "$source_url" | cut -d/ -f5-)
+    sbert_response=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT:-6333}/collections/sbert_books")
+    SBERT_COUNT=$(echo "$sbert_response" | grep -o '"vectors_count":[0-9]*' | cut -d':' -f2)
     
-    if AWS_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY \
-       aws --endpoint-url "${R2_ENDPOINT_URL_CLEANED}" s3 cp \
-       "s3://${bucket}/${key}" "$dest_file"; then
-      download_time=$(($(date +%s) - download_start))
-      file_size=$(du -h "$dest_file" | cut -f1)
-      log "INFO" "Successfully downloaded $file_label via AWS CLI (${file_size}, took ${download_time}s)"
-      return 0
-    else
-      log "WARN" "AWS CLI download failed for $file_label, falling back to curl"
+    if [ -z "$SBERT_COUNT" ]; then
+      log "WARN" "Could not determine vector count for sbert_books collection"
+      SBERT_COUNT=0
     fi
-  fi
-  
-  # Fallback to curl
-  # Generate current date in AWS format (required for authentication)
-  if [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ]; then
-    log "DEBUG" "Using curl with AWS v4 signature authentication for $file_label"
     
-    # Create temporary headers file
-    HEADERS_FILE=$(mktemp)
+    log "INFO" "Current SBERT books vectors count: $SBERT_COUNT"
     
-    # Extract hostname from R2 endpoint
-    local hostname=$(echo "$R2_ENDPOINT_URL_CLEANED" | sed 's|^https*://||' | sed 's|/.*$||')
-    
-    # Construct authentication headers using R2 credentials
-    DATE=$(date -u +"%Y%m%dT%H%M%SZ")
-    DATE_SHORT=$(date -u +"%Y%m%d")
-    
-    echo "Host: ${hostname}" > $HEADERS_FILE
-    echo "X-Amz-Date: $DATE" >> $HEADERS_FILE
-    echo "X-Amz-Content-Sha256: UNSIGNED-PAYLOAD" >> $HEADERS_FILE
-    echo "Authorization: AWS4-HMAC-SHA256 Credential=${R2_ACCESS_KEY_ID}/${DATE_SHORT}/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=dummy" >> $HEADERS_FILE
-    
-    if curl -L --retry 3 --retry-delay 2 -f -o "$dest_file" -H "@$HEADERS_FILE" "$source_url"; then
-      download_time=$(($(date +%s) - download_start))
-      file_size=$(du -h "$dest_file" | cut -f1)
-      log "INFO" "Successfully downloaded $file_label with auth headers (${file_size}, took ${download_time}s)"
-      rm -f $HEADERS_FILE
-      return 0
-    else
-      log "WARN" "Authenticated download failed for $file_label with status: $?, trying unauthenticated"
-      rm -f $HEADERS_FILE
-    fi
-  fi
-  
-  # Final attempt: unauthenticated
-  log "DEBUG" "Using curl without authentication for $file_label"
-  if curl -L --retry 3 --retry-delay 2 -f -o "$dest_file" "$source_url"; then
-    download_time=$(($(date +%s) - download_start))
-    file_size=$(du -h "$dest_file" | cut -f1)
-    log "INFO" "Successfully downloaded $file_label (${file_size}, took ${download_time}s)"
-    return 0
+    log "INFO" "Deleting existing collections to ensure fresh data..."
+    for collection in sbert_books gmf_users gmf_book_embeddings; do
+      delete_response=$(curl -s -X DELETE "http://${QDRANT_HOST}:${QDRANT_PORT:-6333}/collections/${collection}")
+      log "INFO" "Deleted collection ${collection}: $delete_response"
+    done
   else
-    log "ERROR" "Failed to download $file_label (HTTP status: $?)"
-    return 1
+    log "INFO" "No collections found, will create new collections"
   fi
-}
-
-# Download embeddings if needed
-if [ "$SKIP_EMBEDDING_DOWNLOAD" = false ]; then
-  log "DEBUG" "R2 Environment Variables for embedding download:"
-  log "DEBUG" "- R2_ENDPOINT_URL: '${R2_ENDPOINT_URL}'"
-  log "DEBUG" "- R2_BUCKET_NAME: '${R2_BUCKET_NAME}'"
-  log "DEBUG" "- R2_OBJECT_KEY_QDRANT: '${R2_OBJECT_KEY_QDRANT}'"
-  log "DEBUG" "- R2_ACCESS_KEY_ID: '${R2_ACCESS_KEY_ID:0:5}***'"
   
-  # Build the download URL from R2 variables
-  if [ -z "$R2_ENDPOINT_URL" ] || [ -z "$R2_BUCKET_NAME" ] || [ -z "$R2_OBJECT_KEY_QDRANT" ]; then
-    log "ERROR" "One or more R2 environment variables are not set. Skipping embedding download."
-    log "ERROR" "Required: R2_ENDPOINT_URL, R2_BUCKET_NAME, R2_OBJECT_KEY_QDRANT"
-    EMBEDDING_DOWNLOAD_SUCCESS=false
-  else
-    # Make sure endpoint URL has proper format
-    # Remove trailing slash if present
+  # Always download and import embeddings
+  log "INFO" "Always downloading and populating embeddings from R2..."
+  
+  # Download embedding files
+  log "INFO" "Downloading embedding files..."
+  mkdir -p /tmp/embeddings
+  
+  # Source URL for embeddings
+  if [ -n "$R2_ENDPOINT_URL" ] && [ -n "$R2_BUCKET_NAME" ] && [ -n "$R2_OBJECT_KEY_QDRANT" ]; then
+    # Download from R2
+    log "INFO" "Downloading embeddings from R2..."
     R2_ENDPOINT_URL_CLEANED=${R2_ENDPOINT_URL%/}
-    # Add https:// prefix if needed
     if [[ "$R2_ENDPOINT_URL_CLEANED" != http* ]]; then
       R2_ENDPOINT_URL_CLEANED="https://$R2_ENDPOINT_URL_CLEANED"
     fi
     
-    # Create embeddings directory
-    mkdir -p /tmp/embeddings
-    log "INFO" "Created embeddings directory: /tmp/embeddings"
-    
-    # Define the embedding files to download
-    EMBEDDING_FILES=("SBERT_embeddings.parquet" "gmf_user_embeddings.parquet" "gmf_book_embeddings.parquet")
-    EMBEDDING_SUCCESS=()
-    
-    # Download each embedding file directly from R2 endpoint
-    for file in "${EMBEDDING_FILES[@]}"; do
+    # Download embedding files
+    EMBEDDING_SUCCESS=true
+    for file in "SBERT_embeddings.parquet" "gmf_user_embeddings.parquet" "gmf_book_embeddings.parquet"; do
       URL="${R2_ENDPOINT_URL_CLEANED}/${R2_OBJECT_KEY_QDRANT}${file}"
-      log "INFO" "Downloading embedding file: $file"
-      download_file "$URL" "/tmp/embeddings/${file}" "${file%.parquet} embeddings"
-      EMBEDDING_SUCCESS+=($?)
+      log "INFO" "Downloading $file from $URL..."
+      if ! curl -L --retry 3 --retry-delay 2 -f -o "/tmp/embeddings/${file}" "$URL"; then
+        log "ERROR" "Failed to download $file"
+        EMBEDDING_SUCCESS=false
+      else
+        log "INFO" "Successfully downloaded $file"
+      fi
     done
+  
+  # Upload embeddings to Qdrant
+  if [ "$EMBEDDING_SUCCESS" = true ]; then
+    log "INFO" "Uploading embeddings to Qdrant..."
     
-    # Set individual success flags for compatibility with the rest of the script
-    SBERT_SUCCESS=${EMBEDDING_SUCCESS[0]}
-    GMF_USER_SUCCESS=${EMBEDDING_SUCCESS[1]}
-    GMF_BOOK_SUCCESS=${EMBEDDING_SUCCESS[2]}
+    # Install Python dependencies first
+    log "INFO" "Installing Python dependencies..."
+    pip install pandas numpy qdrant-client dask[dataframe] pyarrow --break-system-packages || {
+      log "WARN" "Failed to install with system packages, trying with virtualenv..."
+      python3 -m venv /tmp/venv
+      . /tmp/venv/bin/activate
+      pip install pandas numpy qdrant-client dask[dataframe] pyarrow
+    }
     
-    # Download ID mapping files - use direct endpoint URL
-    USER_MAP_OBJECT_KEY="data/user_id_map_reduced.csv"
-    USER_MAP_URL="${R2_ENDPOINT_URL_CLEANED}/${USER_MAP_OBJECT_KEY}"
-    
-    download_file "$USER_MAP_URL" "/tmp/embeddings/user_id_map.csv" "user ID map" 
-    USER_MAP_SUCCESS=$?
-    
-    if [ $USER_MAP_SUCCESS -eq 0 ]; then
-      row_count=$(wc -l < /tmp/embeddings/user_id_map.csv)
-      log "INFO" "User ID map contains ${row_count} rows"
+    # Now run the Python script to upload embeddings
+    log "INFO" "Running Python script to upload embeddings..."
+    if python /root/scripts/upload_embeddings.py \
+      --qdrant-host ${QDRANT_HOST} \
+      --qdrant-port ${QDRANT_PORT:-6333} \
+      --qdrant-grpc-port ${QDRANT_GRPC_PORT:-6334} \
+      --use-grpc \
+      --embeddings-dir /tmp/embeddings; then
+      
+      log "INFO" "Successfully uploaded embeddings to Qdrant"
     else
-      # Create an empty file as a fallback
-      echo "user_id,new_userId,original_userId" > /tmp/embeddings/user_id_map.csv
-      log "WARN" "Failed to download user ID map, created empty file as fallback"
-    fi
-    
-    ITEM_MAP_OBJECT_KEY="data/item_id_map_reduced.csv"
-    ITEM_MAP_URL="${R2_ENDPOINT_URL_CLEANED}/${ITEM_MAP_OBJECT_KEY}"
-    
-    download_file "$ITEM_MAP_URL" "/tmp/embeddings/item_id_map.csv" "item ID map"
-    ITEM_MAP_SUCCESS=$?
-    
-    if [ $ITEM_MAP_SUCCESS -eq 0 ]; then
-      row_count=$(wc -l < /tmp/embeddings/item_id_map.csv)
-      log "INFO" "Item ID map contains ${row_count} rows"
-    else
-      # Create an empty file as a fallback
-      echo "item_id,new_itemId,original_itemId" > /tmp/embeddings/item_id_map.csv
-      log "WARN" "Failed to download item ID map, created empty file as fallback"
-    fi
-    
-    # Check if any embedding files downloaded successfully
-    if [ "$SBERT_SUCCESS" -eq 0 ] || [ "$GMF_USER_SUCCESS" -eq 0 ] || [ "$GMF_BOOK_SUCCESS" -eq 0 ]; then
-      log "INFO" "Download summary: SBERT=$([[ $SBERT_SUCCESS -eq 0 ]] && echo "Success" || echo "Failed"), GMF_USER=$([[ $GMF_USER_SUCCESS -eq 0 ]] && echo "Success" || echo "Failed"), GMF_BOOK=$([[ $GMF_BOOK_SUCCESS -eq 0 ]] && echo "Success" || echo "Failed")"
-      EMBEDDING_DOWNLOAD_SUCCESS=true
-    else
-      log "ERROR" "No embedding files were successfully downloaded."
-      EMBEDDING_DOWNLOAD_SUCCESS=false
+      log "WARN" "Error during upload with gRPC, retrying with HTTP..."
+      if python /root/scripts/upload_embeddings.py \
+        --qdrant-host ${QDRANT_HOST} \
+        --qdrant-port ${QDRANT_PORT:-6333} \
+        --embeddings-dir /tmp/embeddings \
+        --use-grpc=false; then
+        
+        log "INFO" "Successfully uploaded embeddings to Qdrant using HTTP"
+      else
+        log "ERROR" "Failed to upload embeddings to Qdrant"
+      fi
     fi
   fi
-else
-  log "INFO" "Skipping embedding download - collections already populated"
-  EMBEDDING_DOWNLOAD_SUCCESS=false
-fi
-
-# Upload embeddings to Qdrant
-if [ "$EMBEDDING_DOWNLOAD_SUCCESS" = true ]; then
-  log "INFO" "Installing Python dependencies for embedding upload..."
-  pip_start=$(date +%s)
-  
-  # Use pip cache if available in development mode to speed up installation
-  if [ "${APP_ENV:-production}" = "development" ]; then
-    pip install pandas numpy qdrant-client dask[dataframe] pyarrow
-  else
-    pip install pandas numpy qdrant-client dask[dataframe] pyarrow --no-cache-dir
-  fi
-  
-  pip_time=$(($(date +%s) - pip_start))
-  log "INFO" "Python dependencies installed in ${pip_time}s"
-  
-  log "INFO" "Running Python script to upload embeddings to Qdrant..."
-  script_start=$(date +%s)
-  
-  # Execute the external Python script with improved error handling
-  python_output=$(mktemp)
-  python ./scripts/upload_embeddings.py \
-    --qdrant-host ${QDRANT_HOST} \
-    --qdrant-port ${QDRANT_PORT} \
-    --embeddings-dir /tmp/embeddings 2>&1 | tee "$python_output"
-  
-  UPLOAD_RESULT=$?
-  script_time=$(($(date +%s) - script_start))
-  
-  if [ $UPLOAD_RESULT -eq 0 ]; then
-    log "INFO" "Embedding upload script executed successfully in ${script_time}s"
     
-    # Parse the output to get counts of uploaded embeddings
-    SBERT_COUNT=$(grep -o "Uploaded [0-9]* SBERT book embeddings" "$python_output" | awk '{print $2}')
-    GMF_USER_COUNT=$(grep -o "Uploaded [0-9]* GMF user embeddings" "$python_output" | awk '{print $2}')
-    GMF_BOOK_COUNT=$(grep -o "Uploaded [0-9]* GMF book embeddings" "$python_output" | awk '{print $2}')
+    # Cleanup
+    rm -rf /tmp/embeddings
     
-    log "INFO" "Embedding upload counts - SBERT: ${SBERT_COUNT:-0}, GMF Users: ${GMF_USER_COUNT:-0}, GMF Books: ${GMF_BOOK_COUNT:-0}"
-  else
-    log "ERROR" "Embedding upload script failed with exit code $UPLOAD_RESULT after ${script_time}s"
-    log "ERROR" "Last 10 lines of error output:"
-    tail -n 10 "$python_output" | while read -r line; do
-      log "ERROR" "  $line"
+    # Verify the upload
+    log "INFO" "Verifying collections after upload..."
+    for collection in "sbert_books" "gmf_users" "gmf_book_embeddings"; do
+      collection_info=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT:-6333}/collections/${collection}")
+      if echo "$collection_info" | grep -q '"status":"ok"'; then
+        vector_count=$(echo "$collection_info" | grep -o '"vectors_count":[0-9]*' | cut -d':' -f2)
+        log "INFO" "Collection ${collection} contains ${vector_count} vectors"
+      else
+        log "ERROR" "Collection ${collection} not found after upload"
+      fi
     done
+  else
+    log "ERROR" "Skipping embedding upload due to download failures"
   fi
   
-  rm -f "$python_output"
-  
-  # Verify collections after upload
-  collections_after=$(curl -s "http://${QDRANT_HOST}:${QDRANT_PORT}/collections/list")
-  collections_count=$(echo "$collections_after" | grep -o '"name":"[^"]*"' | wc -l)
-  log "INFO" "Found $collections_count collections after upload"
-  
-  # Cleanup temporary files
-  log "INFO" "Cleaning up temporary files"
-  rm -rf /tmp/embeddings
-else
-  log "WARN" "Skipping embedding upload - no files downloaded or collections already populated."
-fi
+  log "INFO" "Qdrant setup completed successfully"
+}
 
-log "INFO" "Qdrant embedding setup complete."
-log "INFO" "Runtime summary:"
-log "INFO" "- Collections existed: $COLLECTIONS_EXIST"
-log "INFO" "- Initial vector count: ${SBERT_COUNT:-N/A}"
-log "INFO" "- Files downloaded: $EMBEDDING_DOWNLOAD_SUCCESS"
-log "INFO" "- Upload result: ${UPLOAD_RESULT:-skipped}"
-if [ "$UPLOAD_RESULT" -eq 0 ]; then
-  log "INFO" "- Vectors uploaded: SBERT=${SBERT_COUNT:-0}, GMF Users=${GMF_USER_COUNT:-0}, GMF Books=${GMF_BOOK_COUNT:-0}"
-fi
-
-# Close the if block for the "if [[ "${BASH_SOURCE[0]}" == "${0}" ]]" condition
+# Main script execution - only runs if not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  log "INFO" "Starting Qdrant embedding uploader..."
+  log "INFO" "Environment: APP_ENV=${APP_ENV:-unknown}"
+  log "INFO" "Qdrant connection: ${QDRANT_HOST}:${QDRANT_PORT} (HTTP) / ${QDRANT_HOST}:${QDRANT_GRPC_PORT:-6334} (gRPC)"
+  log "INFO" "R2 Endpoint: ${R2_ENDPOINT_URL:-not set}"
+  
+  setup_qdrant
 fi
