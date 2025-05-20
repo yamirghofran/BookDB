@@ -24,7 +24,7 @@ services:
       - QDRANT_SERVICE=bookdb-qdrant-dev
       - VIRTUAL_HOST=localhost
       - APP_ENV=development
-  # Backend Go service
+  # Backend Go service  backend-dev:
   backend-dev:
     build:
       context: ./website/backend
@@ -40,6 +40,7 @@ services:
       - DB_PASSWORD=bookdb_dev_password
       - DB_NAME=bookdb_dev
       - QDRANT_HOST=bookdb-qdrant-dev
+      # Use HTTP port for healthcheck, gRPC port is correctly configured in Go code
       - QDRANT_PORT=6333
       - QDRANT_HTTP_VERSION=1.1
       - APP_ENV=development
@@ -66,7 +67,7 @@ services:
       retries: 3
       start_period: 5s
 
-  # PostgreSQL database for development
+  # PostgreSQL database for development  postgres-dev:
   postgres-dev:
     image: postgres:16-alpine
     container_name: bookdb-postgres-dev
@@ -74,7 +75,6 @@ services:
       - "5432:5432" # Access database directly with tools like pgAdmin
     volumes:
       - postgres_data_dev:/var/lib/postgresql/data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
       - POSTGRES_USER=bookdb_dev
       - POSTGRES_PASSWORD=bookdb_dev_password
@@ -88,13 +88,13 @@ services:
       test: [ "CMD-SHELL", "pg_isready -U bookdb_dev" ]
       interval: 5s
       timeout: 3s
-      retries: 3
-  # Qdrant vector database
+      retries: 3 # Qdrant vector database
   qdrant-dev:
     image: qdrant/qdrant:latest
     container_name: bookdb-qdrant-dev
     ports:
       - "6333:6333" # Qdrant dashboard accessible at localhost:6333/dashboard/
+      - "6334:6334" # Expose gRPC port as well for backend connectivity
     volumes:
       - qdrant_data_dev:/qdrant/storage
     environment:
