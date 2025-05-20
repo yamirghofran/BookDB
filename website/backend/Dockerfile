@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o server ./cmd/server
 FROM alpine:latest
 
 # Install ca-certificates for HTTPS requests and tools for database operations
-RUN apk --no-cache add ca-certificates postgresql-client wget curl jq bash
+RUN apk --no-cache add ca-certificates postgresql-client wget curl jq bash python3 py3-pip
 
 WORKDIR /root/
 
@@ -30,13 +30,16 @@ WORKDIR /root/
 COPY --from=builder /app/server .
 COPY --from=builder /app/sql /root/sql
 
-# Copy the entrypoint script
-COPY entrypoint.sh /root/entrypoint.sh
-RUN chmod +x /root/entrypoint.sh
+# Create scripts directory and copy necessary files
+RUN mkdir -p /root/scripts
 
-# Health check 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
-  CMD wget -q --spider http://localhost:8080/api/health || exit 1
+# Copy the entrypoint scripts and Python utilities
+COPY entrypoint.sh /root/entrypoint.sh
+COPY postgres_entrypoint.sh /root/postgres_entrypoint.sh
+COPY qdrant_entrypoint.sh /root/qdrant_entrypoint.sh
+COPY scripts/upload_embeddings.py /root/scripts/upload_embeddings.py
+RUN chmod +x /root/entrypoint.sh /root/postgres_entrypoint.sh /root/qdrant_entrypoint.sh /root/scripts/upload_embeddings.py
+
 
 # Expose port
 EXPOSE 8080
