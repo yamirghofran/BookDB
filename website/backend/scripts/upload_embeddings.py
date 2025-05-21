@@ -4,21 +4,16 @@ Script to upload embeddings to Qdrant vector database.
 This script handles SBERT and GMF embeddings for books and users.
 """
 import os
+import csv
 import sys
+import uuid
 import logging
 import traceback
 import pandas as pd
-import dask.dataframe as dd
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
-from abc import ABC, abstractmethod
+from qdrant_client.models import PointStruct, VectorParams, Distance
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+logging.basicConfig(level=logging.INFO)
 
 # Docker environment configuration
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
@@ -36,280 +31,301 @@ class QdrantManager:
         self.host = host or os.environ.get("QDRANT_HOST", "localhost")
         self.port = port or int(os.environ.get("QDRANT_PORT", "6333"))
         self.grpc_port = grpc_port or int(os.environ.get("QDRANT_GRPC_PORT", "6334"))
+        self.prefer_grpc = prefer_grpc
 
         if prefer_grpc:
             try:
                 logging.info(
-                    f"Connecting to Qdrant using gRPC at {self.host}:{self.grpc_port}"
+                    f"Connecting to Qdrant using gRPC at {self.host}:{self.grpc_port} (TLS disabled)"
                 )
                 self.client = QdrantClient(
-                    host=self.host, port=self.grpc_port, prefer_grpc=True, timeout=60.0
+                    host=self.host,
+                    port=self.grpc_port,
+                    prefer_grpc=True,
+                    timeout=60.0,
+                    https=False,
                 )
-                logging.info("Successfully connected using gRPC")
+                test_collection = "connection_test"
+                try:
+                    collections = self.client.get_collections().collections
+                    collection_names = [c.name for c in collections]
+
+                    if test_collection in collection_names:
+                        self.client.delete_collection(collection_name=test_collection)
+
+                    self.client.create_collection(
+                        collection_name=test_collection,
+                        vectors_config=VectorParams(size=4, distance=Distance.COSINE),
+                    )
+
+                    test_uuid = str(uuid.uuid4())
+                    test_point = PointStruct(
+                        id=test_uuid,
+                        vector=[1.0, 0.0, 0.0, 0.0],
+                        payload={"test": True},
+                    )
+                    self.client.upsert(
+                        collection_name=test_collection, points=[test_point]
+                    )
+                    retrieved = self.client.retrieve(
+                        collection_name=test_collection, ids=[test_uuid]
+                    )
+                    if not retrieved:
+                        raise Exception("Failed to retrieve test point")
+                    self.client.delete_collection(collection_name=test_collection)
+                    logging.info(
+                        "Successfully verified gRPC connection with test operations"
+                    )
+                except Exception as e:
+                    raise Exception(f"gRPC connection test failed: {e}")
             except Exception as e:
                 logging.warning(
                     f"Failed to connect using gRPC: {e}, falling back to HTTP"
                 )
                 self.client = QdrantClient(
-                    url=f"http://{self.host}:{self.port}", timeout=60.0
+                    url=f"http://{self.host}:{self.port}",
+                    timeout=60.0,
+                    prefer_grpc=False,
+                    https=False,
                 )
         else:
-            logging.info(f"Connecting to Qdrant using HTTP at {self.host}:{self.port}")
+            logging.info(
+                f"Connecting to Qdrant using HTTP at {self.host}:{self.port} (TLS disabled)"
+            )
             self.client = QdrantClient(
-                url=f"http://{self.host}:{self.port}", timeout=60.0
+                url=f"http://{self.host}:{self.port}",
+                timeout=60.0,
+                prefer_grpc=False,
+                https=False,
             )
 
-        # Test connection
         try:
             collections = self.client.get_collections()
             logging.info(
-                f"Successfully connected to Qdrant. Available collections: {collections.collections}"
+                f"Successfully connected to Qdrant. Available collections: {[c.name for c in collections.collections]}"
             )
+            for collection in collections.collections:
+                info = self.client.get_collection(collection.name)
+                logging.info(
+                    f"Collection {collection.name} contains {info.vectors_count} vectors"
+                )
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Qdrant: {e}")
 
     def create_collection_if_not_exists(
         self, collection_name, vector_size, distance_metric
     ):
+        """Create a collection if it doesn't exist."""
         try:
-            self.client.get_collection(collection_name=collection_name)
-            logging.info(f"Collection '{collection_name}' already exists.")
+            self.client.get_collection(collection_name)
+            logging.info(f"Collection {collection_name} already exists")
         except Exception:
-            logging.info(f"Creating collection '{collection_name}'...")
+            logging.info(f"Creating collection {collection_name}")
             self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(size=vector_size, distance=distance_metric),
             )
-            logging.info(f"Collection '{collection_name}' created.")
+            logging.info(f"Created collection {collection_name}")
 
     def batch_upload_points(self, collection_name, points, batch_size=500):
+        """Upload points in batches with proper error handling and verification."""
         if not points:
             logging.warning(f"No points to upload for collection '{collection_name}'.")
-            return False
+            return
+
+        total_points = len(points)
+        total_batches = (total_points + batch_size - 1) // batch_size
         logging.info(
-            f"Upserting {len(points)} points to '{collection_name}' in batches of {batch_size}..."
+            f"Uploading {total_points} points to {collection_name} in batches of {batch_size}"
         )
-        try:
-            for i in range(0, len(points), batch_size):
-                batch = points[i : i + batch_size]
+
+        for i in range(0, total_points, batch_size):
+            batch = points[i : i + batch_size]
+            batch_num = i // batch_size + 1
+            try:
                 self.client.upsert(
                     collection_name=collection_name, points=batch, wait=True
                 )
-            logging.info(
-                f"Successfully uploaded {len(points)} points to '{collection_name}'."
-            )
-            return True
-        except Exception as e:
-            logging.error(f"Error uploading to {collection_name}: {e}")
-            return False
 
-
-class BaseEmbeddingProcessor(ABC):
-    def __init__(self, embedding_file_path):
-        self.embedding_file_path = embedding_file_path
-        self.raw_embeddings_ddf = None
-        self.processed_embeddings_ddf = None
-
-    def _load_parquet_dask(self):
-        logging.info(f"Loading embeddings from {self.embedding_file_path}...")
-        self.raw_embeddings_ddf = dd.read_parquet(self.embedding_file_path)
-        return self.raw_embeddings_ddf
-
-    def _combine_embedding_columns(self, ddf, num_embedding_cols=32):
-        embedding_cols = [str(i) for i in range(num_embedding_cols)]
-        ddf["embedding"] = ddf.apply(
-            lambda row: row[embedding_cols].tolist(),
-            axis=1,
-            meta=("embedding", "object"),
-        )
-        return ddf.drop(columns=embedding_cols)
-
-    @abstractmethod
-    def process_embeddings(self):
-        pass
-
-    @abstractmethod
-    def generate_qdrant_points(self):
-        pass
-
-
-class GMFUserEmbeddingProcessor(BaseEmbeddingProcessor):
-    def __init__(self, embedding_file_path, user_id_map_path, num_embedding_cols=32):
-        super().__init__(embedding_file_path)
-        self.user_id_map_path = user_id_map_path
-        self.num_embedding_cols = num_embedding_cols
-
-    def process_embeddings(self):
-        self._load_parquet_dask()
-        combined_ddf = self._combine_embedding_columns(
-            self.raw_embeddings_ddf, self.num_embedding_cols
-        )
-        # If we have an ID map, use it, otherwise use user_id directly
-        if self.user_id_map_path and os.path.exists(self.user_id_map_path):
-            user_id_map_df = pd.read_csv(self.user_id_map_path)
-            user_id_map_ddf = dd.from_pandas(user_id_map_df, npartitions=1)
-            merged_ddf = combined_ddf.merge(
-                user_id_map_ddf, left_on="user_id", right_on="new_userId", how="inner"
-            )
-            self.processed_embeddings_ddf = merged_ddf[
-                ["original_userId", "embedding"]
-            ].rename(columns={"original_userId": "id"})
-        else:
-            logging.info("No ID map provided or found, using user_id directly")
-            self.processed_embeddings_ddf = combined_ddf[
-                ["user_id", "embedding"]
-            ].rename(columns={"user_id": "id"})
-        logging.info("GMF User embeddings processed.")
-        return self.processed_embeddings_ddf
-
-    def generate_qdrant_points(self):
-        if self.processed_embeddings_ddf is None:
-            raise ValueError(
-                "Embeddings not processed yet. Call process_embeddings() first."
-            )
-        computed_df = self.processed_embeddings_ddf.compute()
-        points = []
-        for _, row in computed_df.iterrows():
-            user_id_val = str(row["id"])
-            points.append(
-                PointStruct(
-                    id=user_id_val,
-                    vector=row["embedding"],
-                    payload={"user_id": user_id_val},
-                )
-            )
-        logging.info(f"Generated {len(points)} Qdrant points for GMF User embeddings.")
-        return points
-
-
-class GMFBookEmbeddingProcessor(BaseEmbeddingProcessor):
-    def __init__(self, embedding_file_path, item_id_map_path, num_embedding_cols=32):
-        super().__init__(embedding_file_path)
-        self.item_id_map_path = item_id_map_path
-        self.num_embedding_cols = num_embedding_cols
-
-    def process_embeddings(self):
-        self._load_parquet_dask()
-        logging.info(
-            f"Loaded {len(self.raw_embeddings_ddf.columns)} columns from GMF book embeddings"
-        )
-        logging.info(
-            f"Available columns: {self.raw_embeddings_ddf.columns.compute().tolist()}"
-        )
-
-        combined_ddf = self._combine_embedding_columns(
-            self.raw_embeddings_ddf, self.num_embedding_cols
-        )
-        logging.info(f"Combined embeddings shape: {combined_ddf.shape[0].compute()}")
-
-        # If we have an ID map, use it, otherwise use item_id directly
-        if self.item_id_map_path and os.path.exists(self.item_id_map_path):
-            item_id_map_df = pd.read_csv(self.item_id_map_path)
-            logging.info(f"Loaded ID map with {len(item_id_map_df)} entries")
-            item_id_map_ddf = dd.from_pandas(item_id_map_df, npartitions=1)
-            merged_ddf = combined_ddf.merge(
-                item_id_map_ddf, left_on="item_id", right_on="new_itemId", how="inner"
-            )
-            logging.info(
-                f"After merging with ID map: {merged_ddf.shape[0].compute()} entries"
-            )
-            self.processed_embeddings_ddf = merged_ddf[
-                ["original_itemId", "embedding"]
-            ].rename(columns={"original_itemId": "id"})
-        else:
-            logging.info("No ID map provided or found, using item_id directly")
-            # Sample and log some IDs for debugging
-            sample_ids = combined_ddf["item_id"].head().compute()
-            logging.info(f"Sample of item_ids being used: {sample_ids.tolist()}")
-
-            self.processed_embeddings_ddf = combined_ddf[
-                ["item_id", "embedding"]
-            ].rename(columns={"item_id": "id"})
-
-        total_processed = self.processed_embeddings_ddf.shape[0].compute()
-        logging.info(f"GMF Book embeddings processed. Total entries: {total_processed}")
-        return self.processed_embeddings_ddf
-
-    def generate_qdrant_points(self):
-        if self.processed_embeddings_ddf is None:
-            raise ValueError(
-                "Embeddings not processed yet. Call process_embeddings() first."
-            )
-        computed_df = self.processed_embeddings_ddf.compute()
-        points = []
-        correct_book_id_column_gmf = "id"
-
-        # Log the first few IDs being processed
-        sample_ids = computed_df[correct_book_id_column_gmf].head()
-        logging.info(
-            f"Sample of IDs being processed for Qdrant points: {sample_ids.tolist()}"
-        )
-
-        for _, row in computed_df.iterrows():
-            try:
-                point_id = str(
-                    row[correct_book_id_column_gmf]
-                )  # Keep as string to preserve UUID format
-                points.append(
-                    PointStruct(
-                        id=point_id,
-                        vector=row["embedding"],
-                        payload={"item_id": point_id},
+                if self.prefer_grpc:
+                    sample_point = batch[0]
+                    retrieved = self.client.retrieve(
+                        collection_name=collection_name, ids=[sample_point.id]
                     )
+                    if not retrieved:
+                        raise Exception(
+                            f"Failed to verify upload of point {sample_point.id}"
+                        )
+
+                logging.info(
+                    f"Successfully uploaded and verified batch {batch_num}/{total_batches}"
                 )
             except Exception as e:
-                logging.error(
-                    f"Error processing ID {row[correct_book_id_column_gmf]}: {e}"
-                )
-                continue
-
-        logging.info(f"Generated {len(points)} Qdrant points for GMF Book embeddings")
-        return points
+                logging.error(f"Error in batch {batch_num}: {e}")
+                raise
 
 
-class SBERTEmbeddingProcessor(BaseEmbeddingProcessor):
-    def __init__(self, embedding_file_path):
-        super().__init__(embedding_file_path)
+class IdMapper:
+    def __init__(self, user_id_map_path=None, item_id_map_path=None):
+        self.user_id_map = {}
+        self.item_id_map = {}
+        if user_id_map_path and os.path.exists(user_id_map_path):
+            self.user_id_map = self._load_id_map(user_id_map_path)
+        if item_id_map_path and os.path.exists(item_id_map_path):
+            self.item_id_map = self._load_id_map(item_id_map_path)
 
-    def process_embeddings(self):
-        self._load_parquet_dask()
-        if (
-            "book_id" not in self.raw_embeddings_ddf.columns
-            or "embedding" not in self.raw_embeddings_ddf.columns
-        ):
+    def _load_id_map(self, path):
+        id_map = {}
+        try:
+            with open(path, "r") as f:
+                reader = csv.reader(f)
+                next(reader)
+                for row in reader:
+                    internal_id, external_id = row
+                    id_map[internal_id] = external_id
+        except Exception as e:
+            logging.error(f"Error loading ID map from {path}: {e}")
+        return id_map
+
+    def get_user_external_id(self, internal_id):
+        return self.user_id_map.get(str(internal_id), str(internal_id))
+
+    def get_item_external_id(self, internal_id):
+        return self.item_id_map.get(str(internal_id), str(internal_id))
+
+
+id_mapper = IdMapper()
+
+
+class EmbeddingProcessor:
+    def __init__(self, embedding_file_path, num_embedding_cols):
+        self.embedding_file_path = embedding_file_path
+        self.num_embedding_cols = num_embedding_cols
+        self.raw_embeddings_df = None
+
+    def process_embeddings(self, df):
+        embedding_cols = [f"v{i}" for i in range(self.num_embedding_cols)]
+
+        # Verify all embedding columns exist
+        missing_cols = [col for col in embedding_cols if col not in df.columns]
+        if missing_cols:
             raise ValueError(
-                "SBERT embeddings Dask DataFrame must contain 'book_id' and 'embedding' columns."
+                f"Missing embedding columns in DataFrame: {', '.join(missing_cols)}"
             )
-        self.processed_embeddings_ddf = self.raw_embeddings_ddf[
-            ["book_id", "embedding", "text"]
-        ].rename(columns={"book_id": "id"})
-        logging.info("SBERT Book embeddings processed.")
-        return self.processed_embeddings_ddf
 
-    def generate_qdrant_points(self):
-        if self.processed_embeddings_ddf is None:
-            raise ValueError(
-                "Embeddings not processed yet. Call process_embeddings() first."
-            )
-        computed_df = self.processed_embeddings_ddf.compute()
+        def combine_embeddings(row):
+            return row[embedding_cols].tolist()
+
+        df = df.copy()
+        df["embedding"] = df.apply(combine_embeddings, axis=1)
+        return df
+
+    def load_and_process(self):
+        # Load and validate raw data
+        logging.info(f"Loading embeddings from {self.embedding_file_path}")
+        self.raw_embeddings_df = pd.read_parquet(self.embedding_file_path)
+        logging.info(f"Raw embeddings columns: {list(self.raw_embeddings_df.columns)}")
+
+        # Process embeddings
+        processed_df = self.process_embeddings(self.raw_embeddings_df)
+        return processed_df
+
+
+def upload_embeddings_to_qdrant(
+    embeddings_df,
+    collection_name,
+    qdrant_client,
+    batch_size=100,
+):
+    total_rows = len(embeddings_df)
+    logging.info(f"Uploading {total_rows} embeddings to collection {collection_name}")
+
+    # Process in batches
+    for start_idx in range(0, total_rows, batch_size):
+        end_idx = min(start_idx + batch_size, total_rows)
+        batch_df = embeddings_df.iloc[start_idx:end_idx]
+
         points = []
-        correct_book_id_column_sbert = "id"
-        for _, row in computed_df.iterrows():
-            try:
-                point_id = int(row[correct_book_id_column_sbert])
-            except ValueError:
-                logging.warning(
-                    f"Could not convert ID '{row[correct_book_id_column_sbert]}' to int for SBERT. Using as string."
-                )
-                point_id = str(row[correct_book_id_column_sbert])
-            payload = {"book_id": point_id, "text": row.get("text", "")}
-            points.append(
-                PointStruct(id=point_id, vector=row["embedding"], payload=payload)
+        for _, row in batch_df.iterrows():
+            point_id = str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"{collection_name}_{row['id']}")
             )
-        logging.info(
-            f"Generated {len(points)} Qdrant points for SBERT Book embeddings."
-        )
-        return points
+            point = PointStruct(
+                id=point_id,
+                vector=row["embedding"],
+                payload={
+                    "internal_id": str(row.get("internal_id", row["id"])),
+                    "goodreads_id": str(row.get("goodreads_id", row["id"])),
+                },
+            )
+            points.append(point)
+
+        try:
+            qdrant_client.upsert(
+                collection_name=collection_name, wait=True, points=points
+            )
+            logging.info(f"Uploaded batch {start_idx + 1} to {end_idx} of {total_rows}")
+        except Exception as e:
+            logging.error(f"Error uploading batch to Qdrant: {e}")
+            raise
+
+
+def process_id_mappings(embeddings_df, user_id_map_path, item_id_map_path):
+    """Process ID mappings for both users and items."""
+    required_cols = ["internal_id", "goodreads_id"]
+    merged_df = embeddings_df.copy()
+
+    try:
+        if user_id_map_path and os.path.exists(user_id_map_path):
+            user_id_map_df = pd.read_csv(user_id_map_path)
+            logging.info(f"User ID map shape: {user_id_map_df.shape}")
+
+            missing_cols = [
+                col for col in required_cols if col not in user_id_map_df.columns
+            ]
+            if missing_cols:
+                logging.error(
+                    f"Missing required columns in user ID map: {missing_cols}"
+                )
+                raise ValueError(f"Missing columns in user ID map: {missing_cols}")
+
+            merged_df = pd.merge(
+                merged_df,
+                user_id_map_df,
+                how="left",
+                left_on="user_id",
+                right_on="internal_id",
+            )
+    except Exception as e:
+        logging.error(f"Error processing user ID mappings: {e}")
+        raise
+
+    try:
+        if item_id_map_path and os.path.exists(item_id_map_path):
+            item_id_map_df = pd.read_csv(item_id_map_path)
+            logging.info(f"Item ID map shape: {item_id_map_df.shape}")
+
+            missing_cols = [
+                col for col in required_cols if col not in item_id_map_df.columns
+            ]
+            if missing_cols:
+                logging.error(
+                    f"Missing required columns in item ID map: {missing_cols}"
+                )
+                raise ValueError(f"Missing columns in item ID map: {missing_cols}")
+
+            merged_df = pd.merge(
+                merged_df,
+                item_id_map_df,
+                how="left",
+                left_on="item_id",
+                right_on="internal_id",
+            )
+    except Exception as e:
+        logging.error(f"Error processing item ID mappings: {e}")
+        raise
+
+    return merged_df
 
 
 if __name__ == "__main__":
@@ -341,89 +357,63 @@ if __name__ == "__main__":
         help="Directory containing embedding files",
     )
     parser.add_argument(
+        "--user-id-map",
+        default="/data/id_maps/user_id_map.csv",
+        help="Path to user ID mapping file",
+    )
+    parser.add_argument(
+        "--item-id-map",
+        default="/data/id_maps/item_id_map.csv",
+        help="Path to item ID mapping file",
+    )
+    parser.add_argument(
         "--use-grpc",
-        type=lambda x: str(x).lower() == "true",
-        default=True,
+        type=lambda x: x.lower() in ("true", "t", "yes", "y", "1"),
+        default="true",
         help="Use gRPC for Qdrant connection (true/false)",
     )
-    args = parser.parse_args()
-
-    logging.info("Starting embedding upload with configuration:")
-    logging.info(f"  Qdrant Host: {args.qdrant_host}")
-    logging.info(f"  Qdrant HTTP Port: {args.qdrant_port}")
-    logging.info(f"  Qdrant gRPC Port: {args.qdrant_grpc_port}")
-    logging.info(f"  Embeddings Directory: {args.embeddings_dir}")
-    logging.info(f"  Using gRPC: {args.use_grpc}")
 
     try:
-        # Initialize connection to Qdrant
-        qdrant_manager = QdrantManager(
-            host=args.qdrant_host,
-            port=args.qdrant_port,
-            grpc_port=args.qdrant_grpc_port,
-            prefer_grpc=args.use_grpc,
-        )
+        args = parser.parse_args()
 
-        # Define embedding file paths
-        sbert_embeddings_path = os.path.join(
-            args.embeddings_dir, "SBERT_embeddings.parquet"
-        )
-        gmf_user_embeddings_path = os.path.join(
-            args.embeddings_dir, "gmf_user_embeddings.parquet"
-        )
-        gmf_book_embeddings_path = os.path.join(
-            args.embeddings_dir, "gmf_book_embeddings.parquet"
-        )
+        # Initialize Qdrant client
+        if args.use_grpc:
+            client = QdrantClient(
+                host=args.qdrant_host, port=args.qdrant_grpc_port, prefer_grpc=True
+            )
+        else:
+            client = QdrantClient(
+                host=args.qdrant_host, port=args.qdrant_port, prefer_grpc=False
+            )
 
-        # Upload SBERT embeddings
-        logging.info("Processing SBERT embeddings...")
-        sbert_processor = SBERTEmbeddingProcessor(sbert_embeddings_path)
-        sbert_processor.process_embeddings()
-        sbert_points = sbert_processor.generate_qdrant_points()
-        qdrant_manager.create_collection_if_not_exists(
-            "sbert_books", vector_size=384, distance_metric=Distance.COSINE
-        )
-        qdrant_manager.batch_upload_points("sbert_books", sbert_points)
-
-        # Upload GMF book embeddings
-        logging.info("Processing GMF book embeddings...")
-        gmf_book_processor = GMFBookEmbeddingProcessor(
-            gmf_book_embeddings_path, None, num_embedding_cols=32
-        )
-        gmf_book_processor.process_embeddings()
-        gmf_book_points = gmf_book_processor.generate_qdrant_points()
-        qdrant_manager.create_collection_if_not_exists(
-            "gmf_book_embeddings", vector_size=32, distance_metric=Distance.DOT
-        )
-        qdrant_manager.batch_upload_points("gmf_book_embeddings", gmf_book_points)
-
-        # Upload GMF user embeddings
-        logging.info("Processing GMF user embeddings...")
-        gmf_user_processor = GMFUserEmbeddingProcessor(
-            gmf_user_embeddings_path, None, num_embedding_cols=32
-        )
-        gmf_user_processor.process_embeddings()
-        gmf_user_points = gmf_user_processor.generate_qdrant_points()
-        qdrant_manager.create_collection_if_not_exists(
-            "gmf_users", vector_size=32, distance_metric=Distance.DOT
-        )
-        qdrant_manager.batch_upload_points("gmf_users", gmf_user_points)
-
-        # Verify the upload
+        # Create collections if they don't exist
         try:
-            collections = qdrant_manager.client.get_collections()
-            for collection in collections.collections:
-                info = qdrant_manager.client.get_collection(collection.name)
-                logging.info(
-                    f"Collection {collection.name} contains {info.vectors_count} vectors"
-                )
-            logging.info("Embedding upload completed successfully")
-            sys.exit(0)
+            client.create_collection(
+                collection_name="gmf_book_embeddings",
+                vectors_config=VectorParams(size=4, distance=Distance.COSINE),
+            )
         except Exception as e:
-            logging.error(f"Error verifying collections: {e}")
-            sys.exit(1)
+            logging.warning(f"Collection might already exist: {e}")
 
+        # Process and upload embeddings
+        processor = EmbeddingProcessor(
+            embedding_file_path=args.embeddings_dir, num_embedding_cols=4
+        )
+
+        embeddings_df = processor.load_and_process()
+        if embeddings_df is not None:
+            # Process ID mappings
+            embeddings_df = process_id_mappings(
+                embeddings_df, args.user_id_map, args.item_id_map
+            )
+
+            # Upload to Qdrant
+            upload_embeddings_to_qdrant(
+                embeddings_df=embeddings_df,
+                collection_name="gmf_book_embeddings",
+                qdrant_client=client,
+            )
     except Exception as e:
-        logging.error(f"Error during embedding upload: {e}")
+        logging.error(f"Error during embedding upload process: {e}")
         logging.error(traceback.format_exc())
         sys.exit(1)

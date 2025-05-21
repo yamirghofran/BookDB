@@ -42,7 +42,7 @@ services:
       - QDRANT_HOST=bookdb-qdrant-dev
       # Use gRPC communication with Qdrant
       - QDRANT_PORT=6333 # HTTP port for health checks
-      - QDRANT_GRPC_PORT=6334 # gRPC port for all other operations
+      - QDRANT_GRPC_PORT=6334
       - QDRANT_API_KEY=dev_qdrant_key
       - APP_ENV=development
       - LOG_LEVEL=debug
@@ -62,7 +62,7 @@ services:
     networks:
       - app_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://0.0.0.0:8080/api/health"]
+      test: [ "CMD", "curl", "-f", "http://0.0.0.0:8080/api/health" ]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -102,8 +102,12 @@ services:
       - QDRANT__SERVICE__HTTP_PORT=6333
       - QDRANT__SERVICE__GRPC_PORT=6334
       - QDRANT__SERVICE__ENABLE_TLS=false
-      # Optional API key for development
-      - QDRANT_API_KEY=dev_qdrant_key
+      - QDRANT__SERVICE__GRPC__ENABLE_TLS=false
+      - QDRANT__SERVICE__GRPC__COMPRESSION=true
+      # Additional gRPC settings
+      - QDRANT__SERVICE__GRPC__TIMEOUT=60
+      - QDRANT__SERVICE__GRPC__MAX_MESSAGE_SIZE=33554432  # 32MB for large batch uploads
+      - QDRANT__SERVICE__CORS__ALLOW_CREDENTIALS=true
       # Set correct CORS headers to allow frontend access
       - QDRANT__SERVICE__CORS__ALLOW_ORIGINS=["*"]
       - QDRANT__SERVICE__CORS__ALLOW_METHODS=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
@@ -112,15 +116,14 @@ services:
     networks:
       - app_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      test: [ "CMD", "curl", "-f", "http://localhost:6333/healthz" ]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 15s
     # Install curl during container initialization so it's available for healthchecks
     command: >
-      sh -c "apt-get update && apt-get install -y curl && 
-      /qdrant/entrypoint.sh"
+      sh -c "apt-get update && apt-get install -y curl &&  /qdrant/entrypoint.sh"
 
 volumes:
   postgres_data_dev:
