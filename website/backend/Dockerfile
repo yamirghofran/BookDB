@@ -35,6 +35,8 @@ RUN mkdir -p /root/scripts
 
 # Copy the entrypoint scripts and Python utilities
 COPY entrypoint.sh /root/entrypoint.sh
+RUN apt-get update && apt-get install -y openssl && apt-get clean
+
 COPY postgres_entrypoint.sh /root/postgres_entrypoint.sh
 COPY qdrant_entrypoint.sh /root/qdrant_entrypoint.sh
 COPY scripts/upload_embeddings.py /root/scripts/upload_embeddings.py
