@@ -3,7 +3,7 @@ import numpy as np
 import dask.dataframe as dd
 import os
 from typing import Dict, Any
-from ..pipeline import PipelineStep
+from .core import PipelineStep
 
 class NCFDataPreprocessorStep(PipelineStep):
     def __init__(self, name: str):

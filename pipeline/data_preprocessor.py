@@ -12,8 +12,7 @@ import boto3
 from botocore.config import Config
 from typing import Dict, Any
 
-# Assuming pipeline.py is in the parent directory of the 'pipeline' package/directory
-from ..pipeline import PipelineStep
+from .core import PipelineStep
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)

@@ -5,7 +5,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from abc import ABC, abstractmethod
 from typing import Dict, Any
-from ..pipeline import PipelineStep
+from .core import PipelineStep
 import logging
 
 class QdrantManager:

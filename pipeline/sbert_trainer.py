@@ -17,7 +17,7 @@ import json
 import random
 from datasets import load_dataset
 from typing import Dict, List, Tuple, Any, Optional
-from ..pipeline import PipelineStep
+from .core import PipelineStep
 from ..utils import get_device
 
 

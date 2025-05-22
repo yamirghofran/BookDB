@@ -11,7 +11,7 @@ import pytz # Required for handling timezones robustly
 import ast # For safely evaluating string representations of lists
 import numpy as np
 from typing import Dict, Any
-from ..pipeline import PipelineStep
+from .core import PipelineStep
 
 # --- Logging & Faker Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

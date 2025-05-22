@@ -8,7 +8,7 @@ import dask.dataframe as dd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from typing import Dict, Any
-from ..pipeline import PipelineStep
+from .core import PipelineStep
 from ..utils import get_device
 
 class SBertEmbedderStep(PipelineStep):

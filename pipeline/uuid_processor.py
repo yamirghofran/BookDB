@@ -2,7 +2,7 @@ import pandas as pd
 import uuid
 import os
 from typing import Dict, Any
-from ..pipeline import PipelineStep
+from .core import PipelineStep
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
