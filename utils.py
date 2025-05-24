@@ -142,67 +142,67 @@ def send_discord_webhook(
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
+
+def download_initial_datasets(file_names_df, dataset_names: List[str] = ["goodreads_books.json.gz", "goodreads_book_works.json.gz", "goodreads_reviews_dedup.json.gz", "goodreads_interactions.csv", "goodreads_interactions_dedup.json.gz", "book_id_map.csv", "user_id_map.csv", "goodreads_book_authors.json.gz"], data_dir: str = "./data"):
+    """
+    Download initial datasets from remote URLs to local data directory.
+    
+    Args:
+        file_names_df: DataFrame or dict-like object with 'name' and 'type' columns/keys
+        dataset_names (List[str]): List of dataset names to download
+        data_dir (str): Directory to save datasets (default: "./data")
+    """
+    # Create data directory if it doesn't exist
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+        print(f"Created directory: {data_dir}")
+    
+    # Create file name to type mapping
+    if hasattr(file_names_df, 'values'):  # DataFrame-like
+        file_name_type_mapping = dict(zip(file_names_df['name'].values, file_names_df['type'].values))
+    else:  # Dictionary-like
+        file_name_type_mapping = dict(zip(file_names_df['name'], file_names_df['type']))
+    
+    # Create file name to URL mapping
+    file_name_url_mapping = {}
+    for fname in file_name_type_mapping:
+        ftype = file_name_type_mapping[fname]
+        if ftype == "complete":
+            url = 'https://mcauleylab.ucsd.edu/public_datasets/gdrive/goodreads/' + fname
+            file_name_url_mapping[fname] = url
+        elif ftype == "byGenre":
+            url = 'https://mcauleylab.ucsd.edu/public_datasets/gdrive/goodreads/byGenre/' + fname
+            file_name_url_mapping[fname] = url
+    
+    def download_by_name(fname, local_filename):
+        """Download a single dataset by name."""
+        if fname in file_name_url_mapping:
+            url = file_name_url_mapping[fname]
+            try:
+                print(f"Downloading {fname} from {url}...")
+                with requests.get(url, stream=True) as r:
+                    r.raise_for_status()
+                    with open(local_filename, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                print(f'Dataset {fname} has been downloaded to {local_filename}!')
+            except requests.exceptions.RequestException as e:
+                print(f'Error downloading {fname}: {e}')
+            except Exception as e:
+                print(f'Unexpected error downloading {fname}: {e}')
+        else:
+            print(f'Dataset {fname} cannot be found!')
+    
+    # Download each requested dataset
+    for dataset_name in dataset_names:
+        output_path = os.path.join(data_dir, dataset_name)
+        download_by_name(dataset_name, output_path)
+
+
 # Example Usage (commented out):
 # if __name__ == "__main__":
 #     # Make sure to set your DISCORD_WEBHOOK_URL environment variable or replace the string directly
-#     your_webhook_url = os.getenv("DISCORD_WEBHOOK_URL_TEST") 
-#
-#     if not your_webhook_url:
-#         print("Please set the DISCORD_WEBHOOK_URL_TEST environment variable for testing.")
-#     else:
-#         # 1. Simple text message
-#         # send_discord_webhook(your_webhook_url, content="Hello from Python script!")
-
-#         # 2. Message with an embed
-#         import datetime
-#         example_embed = {
-#             "title": "Pipeline Notification",
-#             "description": "The data processing pipeline has **completed** successfully.",
-#             "color": 0x00FF00,  # Green
-#             "fields": [
-#                 {"name": "Stage", "value": "Data Ingestion", "inline": True},
-#                 {"name": "Status", "value": "Success ✅", "inline": True},
-#                 {"name": "Items Processed", "value": "10,572"},
-#                 {"name": "Next Step", "value": "Model Training"}
-#             ],
-#             "footer": {"text": f"Report generated at {datetime.datetime.now(datetime.timezone.utc).isoformat()}"},
-#             "author": {"name": "Automated System", "icon_url": "https://i.imgur.com/R66g1Pe.jpg"} # Example icon
-#         }
-#         send_discord_webhook(your_webhook_url, embed=example_embed, username="My Bot", content="Update:")
-
-#         # 3. Message with an embed and a file attachment
-#         # Create a dummy file for testing
-#         dummy_file_path = "test_report.txt"
-#         with open(dummy_file_path, "w") as f:
-#             f.write("This is a test report.\n")
-#             f.write(f"Generated on: {datetime.datetime.now(datetime.timezone.utc).isoformat()}")
-#
-#         embed_with_file = {
-#             "title": "Analysis Complete",
-#             "description": "Analysis report is attached.",
-#             "color": 0x0000FF # Blue
-#         }
-#         send_discord_webhook(
-#             your_webhook_url,
-#             content="Please find the report attached.",
-#             embed=embed_with_file,
-#             attachments=[('final_report.txt', dummy_file_path)]
-#         )
-#         os.remove(dummy_file_path) # Clean up dummy file
-
-#         # 4. Message with only a file attachment
-#         # Create another dummy file
-#         dummy_image_path = "test_image.png" # Assuming you have a placeholder image or create one
-#         # For simplicity, let's reuse the text file as a "pretend" image for this example structure
-#         with open(dummy_image_path, "w") as f: f.write("This is a placeholder for an image.")
-#
-#         send_discord_webhook(
-#             your_webhook_url,
-#             attachments=[('important_diagram.png', dummy_image_path)],
-#             content="Here is the diagram you requested:"
-#         )
-#         os.remove(dummy_image_path)
-
+#     your_webhook_url = os.getenv("DISCORD_WEBHOOK_URL_TEST")
 
 def download_from_r2(object_name, local_path, bucket_name="bookdbio"):
     """

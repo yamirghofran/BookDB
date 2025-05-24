@@ -14,7 +14,7 @@ from typing import Dict, Any
 import datetime
 
 from .core import PipelineStep
-from utils import send_discord_webhook
+from utils import send_discord_webhook, download_initial_datasets
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
@@ -57,6 +57,9 @@ class DataPreprocessorStep(PipelineStep):
         os.makedirs(self.base_output_path, exist_ok=True)
         self.logger.info(f"Ensured output directory exists: {self.base_output_path}")
 
+        # Check and download missing datasets
+        self._check_and_download_datasets()
+
         # Specific file configurations
         self.books_input_json = self.config.get("books_input_json", self.books_input_json)
         self.books_output_parquet = self.config.get("books_output_parquet", self.books_output_parquet)
@@ -79,6 +82,75 @@ class DataPreprocessorStep(PipelineStep):
         
         self.authors_input_json = self.config.get("authors_input_json", self.authors_input_json)
         self.authors_output_parquet = self.config.get("authors_output_parquet", self.authors_output_parquet)
+
+    def _check_and_download_datasets(self):
+        """Check for required datasets and download missing ones."""
+        required_datasets = [
+            "goodreads_books.json.gz", 
+            "goodreads_book_works.json.gz", 
+            "goodreads_reviews_dedup.json.gz", 
+            "goodreads_interactions.csv", 
+            "goodreads_interactions_dedup.json.gz",
+            "book_id_map.csv", 
+            "user_id_map.csv", 
+            "goodreads_book_authors.json.gz"
+        ]
+        
+        # Ensure data directory exists
+        os.makedirs(self.base_data_path, exist_ok=True)
+        
+        missing_datasets = []
+        for dataset in required_datasets:
+            dataset_path = os.path.join(self.base_data_path, dataset)
+            if not os.path.exists(dataset_path):
+                missing_datasets.append(dataset)
+                self.logger.info(f"Missing dataset: {dataset}")
+        
+        if missing_datasets:
+            self.logger.info(f"Downloading {len(missing_datasets)} missing datasets...")
+            
+            # Send notification about missing datasets
+            self._send_notification(
+                "Downloading Missing Datasets",
+                f"Found **{len(missing_datasets)}** missing datasets. Starting download...",
+                color=0xFFA500,  # Orange for info
+                fields=[
+                    {"name": "Missing Files", "value": "\n".join([f"`{f}`" for f in missing_datasets[:5]]), "inline": False},
+                    {"name": "Download Location", "value": f"`{self.base_data_path}`", "inline": True}
+                ]
+            )
+            
+            # Create a minimal file_names structure for the download function
+            file_names_data = {
+                'name': required_datasets,
+                'type': ['complete'] * len(required_datasets)  # All datasets are in the complete category
+            }
+            
+            try:
+                download_initial_datasets(file_names_data, missing_datasets, self.base_data_path)
+                
+                # Send success notification
+                self._send_notification(
+                    "Dataset Download Complete",
+                    f"Successfully downloaded **{len(missing_datasets)}** missing datasets",
+                    color=0x00FF00,  # Green for success
+                    fields=[
+                        {"name": "Downloaded Files", "value": f"{len(missing_datasets)} files", "inline": True},
+                        {"name": "Location", "value": f"`{self.base_data_path}`", "inline": True}
+                    ]
+                )
+                
+            except Exception as e:
+                error_msg = f"Failed to download datasets: {str(e)}"
+                self.logger.error(error_msg)
+                self._send_notification(
+                    "Dataset Download Failed",
+                    error_msg,
+                    error=True
+                )
+                raise
+        else:
+            self.logger.info("All required datasets are present.")
 
     def _get_path(self, folder, file_name):
         return os.path.join(folder, file_name)
