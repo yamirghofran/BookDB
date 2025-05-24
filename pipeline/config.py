@@ -30,7 +30,7 @@ class DataPreprocessorConfig:
     books_output_parquet: str = "books.parquet"
     interactions_csv_output_parquet: str = "interactions.parquet"
     interactions_dedup_output_parquet: str = "interactions_dedup.parquet"
-    reviews_output_parquet: str = "reviews.parquet"
+    reviews_output_parquet: str = "reviews_dedup.parquet"
     book_works_output_parquet: str = "books_works.parquet"
     authors_output_parquet: str = "authors.parquet"
     

@@ -28,7 +28,7 @@ class DataPreprocessorStep(PipelineStep):
         self.base_output_path: str = "data/"
         
         # File name configurations - to be set in configure()
-        self.books_input_json: str = "goodreads_books.json"
+        self.books_input_json: str = "goodreads_books.json.gz"
         self.books_output_parquet: str = "books.parquet"
         
         self.interactions_csv_input: str = "goodreads_interactions.csv"
@@ -42,7 +42,7 @@ class DataPreprocessorStep(PipelineStep):
         self.interactions_dedup_chunk_size: int = 150000
         
         self.reviews_input_json: str = "goodreads_reviews.json"
-        self.reviews_output_parquet: str = "reviews.parquet"
+        self.reviews_output_parquet: str = "reviews_dedup.parquet"
         
         self.book_works_input_json: str = "goodreads_book_works.json"
         self.book_works_output_parquet: str = "books_works.parquet"
