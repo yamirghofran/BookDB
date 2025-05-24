@@ -15,597 +15,25 @@ import warnings
 import logging
 import json
 import random
+import datetime
 from datasets import load_dataset
 from typing import Dict, List, Tuple, Any, Optional
-from ..pipeline import PipelineStep
+from .core import PipelineStep
 from ..utils import get_device
-
-
-# --- Configuration ---
-RANDOM_STATE = 42
-MODEL_NAME = 'all-MiniLM-L6-v2'
-BOOKS_DATA_FILE = "../data/reduced_books.parquet"
-AUTHORS_DATA_FILE = "../data/new_authors.parquet"
-BOOK_TEXTS_FILE = "../data/book_texts.parquet"
-TRIPLETS_DATA_FILE = "../data/books_triplets.parquet"
-OUTPUT_BASE_PATH = f'sbert-output/finetuning-{MODEL_NAME}-books'
-EVAL_OUTPUT_PATH = os.path.join(OUTPUT_BASE_PATH, 'eval')
-CHECKPOINT_PATH = os.path.join(OUTPUT_BASE_PATH, 'checkpoints')
-
-# Hyperparameters
-BATCH_SIZE = 32
-EPOCHS = 4
-LEARNING_RATE = 2e-5
-TRIPLET_MARGIN = 0.5
-WARMUP_STEPS_RATIO = 0.1
-EVALUATION_STEPS = 500
-SAVE_STEPS = 1000
-CHECKPOINT_LIMIT = 2
-TEST_SPLIT_SIZE = 0.2
-VALIDATION_SPLIT_SIZE = 0.5 # Relative to the test_split size (0.5 * 0.2 = 0.1 of total)
-MAX_NEGATIVE_SEARCH_ATTEMPTS = 100
-
-# Setup
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
-np.random.seed(RANDOM_STATE)
-torch.manual_seed(RANDOM_STATE)
-random.seed(RANDOM_STATE)
-os.makedirs(OUTPUT_BASE_PATH, exist_ok=True)
-os.makedirs(EVAL_OUTPUT_PATH, exist_ok=True)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# --- Classes ---
-
-class DataLoaderAnalyzer:
-    """Loads and analyzes the initial datasets."""
-    def __init__(self, books_path: str, authors_path: str):
-        self.books_path = books_path
-        self.authors_path = authors_path
-        self.books_df_dd: Optional[dd.DataFrame] = None
-        self.authors_df_pd: Optional[pd.DataFrame] = None
-        self.books_df_pd: Optional[pd.DataFrame] = None
-
-    def load_data(self) -> None:
-        """Loads the books (Dask) and authors (Pandas) data."""
-        logging.info(f"Loading books data from {self.books_path}")
-        self.books_df_dd = dd.read_parquet(self.books_path)
-        logging.info(f"Loading authors data from {self.authors_path}")
-        # Assuming authors data is small enough for Pandas
-        self.authors_df_pd = pd.read_parquet(self.authors_path)
-        logging.info("Data loading complete.")
-
-    def analyze_dataframe(self, df: dd.DataFrame) -> pd.DataFrame:
-        """Analyzes a Dask DataFrame for column info and nulls."""
-        logging.info("Analyzing DataFrame...")
-        cols = df.columns
-        dtypes = df.dtypes
-        total_rows = len(df) # Dask len is efficient
-
-        results = []
-        for col in cols:
-            non_null_count = df[col].count().compute()
-            null_count = total_rows - non_null_count
-            null_percentage = (null_count / total_rows) * 100 if total_rows > 0 else 0
-            results.append({
-                'Column': col,
-                'Data Type': str(dtypes[col]),
-                'Non-Null Count': non_null_count,
-                'Null Count': null_count,
-                'Null Percentage': f'{null_percentage:.2f}%'
-            })
-        results_df = pd.DataFrame(results)
-        logging.info("DataFrame analysis complete.")
-        return results_df.sort_values('Null Percentage', ascending=False)
-
-    def run_analysis(self) -> None:
-        """Loads data and prints the analysis."""
-        if self.books_df_dd is None:
-            self.load_data()
-        analysis_results = self.analyze_dataframe(self.books_df_dd)
-        print("\n--- DataFrame Analysis ---")
-        print(analysis_results)
-        print("-------------------------\n")
-
-    def get_dataframes(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Computes Dask DataFrame to Pandas and returns both."""
-        if self.books_df_dd is None or self.authors_df_pd is None:
-            self.load_data()
-
-        if self.books_df_pd is None:
-             logging.info("Converting books Dask DataFrame to Pandas...")
-             self.books_df_pd = self.books_df_dd.compute()
-             if 'book_id' in self.books_df_pd.columns:
-                 self.books_df_pd.set_index('book_id', inplace=True)
-             logging.info("Conversion complete.")
-
-        return self.books_df_pd, self.authors_df_pd
-
-
-class TextPreprocessor:
-    """Creates combined text representations for books."""
-    def __init__(self, books_df: pd.DataFrame, authors_df: pd.DataFrame, output_path: str):
-        self.books_df = books_df
-        self.authors_df = authors_df.set_index('author_id') # Faster lookup
-        self.output_path = output_path
-        self.book_texts_df: Optional[pd.DataFrame] = None
-        # Define genre and ignore keywords here or load from config
-        self.genre_keywords = sorted([
-            'action', 'adventure', 'comedy', 'crime', 'mystery', 'textbook', 'children', 'mathematics', 'fantasy',
-            'historical', 'horror', 'romance', 'satire', 'science fiction',
-            'scifi', 'speculative fiction', 'thriller', 'western', 'paranormal',
-            'dystopian', 'urban fantasy', 'contemporary', 'young adult', 'ya',
-            'middle grade', 'children\'s', 'literary fiction', 'magic realism',
-            'historical fiction', 'gothic', 'suspense', 'biography', 'memoir',
-            'nonfiction', 'poetry', 'drama', 'historical romance',
-            'fantasy romance', 'romantic suspense', 'science fiction romance',
-            'contemporary romance', 'paranormal romance', 'epic fantasy',
-            'dark fantasy', 'sword and sorcery', 'steampunk', 'cyberpunk',
-            'apocalyptic', 'post-apocalyptic', 'alternate history',
-            'superhero', 'mythology', 'fairy tales', 'folklore', 'war',
-            'military fiction', 'spy fiction', 'political fiction', 'social science fiction',
-            'techno-thriller', 'medical thriller', 'legal thriller',
-            'psychological thriller', 'cozy mystery', 'hardboiled', 'noir',
-            'coming-of-age', 'lgbtq+', 'christian fiction', 'religious fiction',
-            'humor', 'travel', 'food', 'cooking', 'health', 'self-help',
-            'business', 'finance', 'history', 'science', 'technology', 'nature',
-            'art', 'music', 'philosophy', 'education', 'true crime', 'spiritual',
-            'anthology', 'short stories', 'plays', 'screenplays', 'graphic novel',
-            'comics', 'manga', 'erotica', 'new adult', 'chick lit', 'womens fiction',
-            'sports fiction', 'family saga', ' Regency romance', 'literature'
-        ], key=len, reverse=True)
-        self.ignore_keywords = ['to-read', 'owned', 'hardcover', 'shelfari-favorites', 'series', 'might-read',
-                           'dnf-d', 'hambly-barbara', 'strong-females', 'first-in-series',
-                           'no-thanks-series-collections-boxes', 'entertaining-but-limited',
-                           'kate-own', 'e-book', 'compliation', 'my-books',
-                           'books-i-own-but-have-not-read', 'everything-owned', 'books-to-find',
-                           'i-own-it', 'favorite', 'not-read', 'read-some-day', 'library',
-                           'audiobooks', 'status-borrowed', 'owned-books',
-                           'spec-fic-awd-locus-nom', '01', 'hardbacks', 'paper', 'german',
-                           'hardback', 'physical-scifi-fantasy', 'childhood-favorites',
-                           'bundle-same-author', 'aa-sifi-fantasy', 'ready-to-read',
-                           'bought-on-flee-markets', 'fantasy-general', 'hardcopy', 'box-2',
-                           'unfinished', 'magic', 'duplicates', 'favorites', 'books-i-own',
-                           'fantasy-classic', 'own-hard-copy', 'fantasy-read',
-                           'book-club-edition', 'sci-fi-or-fantasy', 'fiction-fantasy',
-                           'fiction-literature-poetry', 'paused-hiatus', 'status—borrowed',
-                           'recs-fantasy', 'fantasy-scifi', 'omnibus', 'speculative',
-                           'sf--fantasy', 'in-my-home-library', 'fant-myth-para-vamps',
-                           'read-in-my-20s']
-
-    def _extract_genres(self, popular_shelves: Any) -> List[str]:
-        """Extracts potential genres from popular shelves."""
-        try:
-            if not isinstance(popular_shelves, np.ndarray) or len(popular_shelves) == 0:
-                return []
-            found_genres = set()
-            for shelf in popular_shelves:
-                if not isinstance(shelf, dict) or 'name' not in shelf: continue
-                shelf_name = shelf['name'].lower().strip()
-                if any(ignore in shelf_name for ignore in self.ignore_keywords): continue
-                for keyword in self.genre_keywords:
-                    if keyword in shelf_name:
-                        found_genres.add(keyword)
-            return sorted(list(found_genres))
-        except Exception as e:
-            logging.error(f"Error in _extract_genres: {e}", exc_info=True)
-            return []
-
-    def create_book_texts(self) -> None:
-        """Generates the combined text for each book."""
-        logging.info("Creating book text representations...")
-        book_texts = []
-        for index, row in self.books_df.iterrows():
-            title = row.get('title', '')
-            description = row.get('description', '')
-            if not title or not description: continue
-
-            genres = self._extract_genres(row.get('popular_shelves', []))
-            author_ids = row.get('authors', [])
-            authors = []
-            for author_id in author_ids:
-                try:
-                    author_name = self.authors_df.loc[author_id, 'name']
-                    authors.append(author_name)
-                except KeyError:
-                    # logging.warning(f"Author ID {author_id} not found for book {index}.")
-                    pass # Optionally log missing authors
-
-            book_text = f"Title: {title} | Genres: {', '.join(genres)} | Description: {description} | Authors: {', '.join(authors)}"
-            book_texts.append({'book_id': index, 'text': book_text})
-
-        self.book_texts_df = pd.DataFrame(book_texts)
-        logging.info(f"Created {len(self.book_texts_df)} book text entries.")
-
-    def save_book_texts(self) -> None:
-        """Saves the generated book texts to a Parquet file."""
-        if self.book_texts_df is None:
-            self.create_book_texts()
-
-        if not self.book_texts_df.empty:
-            logging.info(f"Saving book texts to {self.output_path}")
-            self.book_texts_df.to_parquet(self.output_path, index=False)
-            logging.info("Book texts saved successfully.")
-        else:
-            logging.warning("No book texts generated, skipping save.")
-
-    def get_book_texts_df(self) -> pd.DataFrame:
-        """Returns the book texts DataFrame."""
-        if self.book_texts_df is None:
-             # Try loading if not generated in this run
-            if os.path.exists(self.output_path):
-                logging.info(f"Loading existing book texts from {self.output_path}")
-                self.book_texts_df = pd.read_parquet(self.output_path)
-            else:
-                self.create_book_texts()
-                self.save_book_texts()
-        return self.book_texts_df
-
-
-class TripletGenerator:
-    """Generates (anchor, positive, negative) triplets for training."""
-    def __init__(self, books_df: pd.DataFrame, book_texts_df: pd.DataFrame, output_path: str, max_neg_attempts: int):
-        self.books_df = books_df # Assumes index is 'book_id'
-        self.book_texts_map = book_texts_df.set_index('book_id')['text'].to_dict()
-        self.output_path = output_path
-        self.max_neg_attempts = max_neg_attempts
-        self.triplets_df: Optional[pd.DataFrame] = None
-        self.all_book_ids_with_text = list(self.book_texts_map.keys())
-
-    def generate_triplets(self) -> None:
-        """Creates the triplet data."""
-        logging.info(f"Starting triplet generation for {len(self.book_texts_map)} books...")
-        triplet_data = []
-        processed_anchors = 0
-
-        for anchor_id, anchor_text in self.book_texts_map.items():
-            try:
-                anchor_info = self.books_df.loc[anchor_id]
-                similar_books = anchor_info.get('similar_books', [])
-                if not similar_books: continue
-
-                forbidden_ids = {anchor_id} | set(similar_books)
-
-                for positive_id_str in similar_books:
-                    try:
-                        positive_id = int(positive_id_str) # Ensure ID is integer for lookup
-                    except (ValueError, TypeError):
-                        # logging.warning(f"Invalid similar_book ID '{positive_id_str}' for anchor {anchor_id}. Skipping.")
-                        continue
-
-                    positive_text = self.book_texts_map.get(positive_id)
-                    if positive_text is None:
-                        # logging.warning(f"Text not found for positive book ID {positive_id} (anchor {anchor_id}). Skipping.")
-                        continue
-
-                    negative_id = None
-                    negative_text = None
-                    for _ in range(self.max_neg_attempts):
-                        potential_neg_id = random.choice(self.all_book_ids_with_text)
-                        if potential_neg_id not in forbidden_ids:
-                            potential_neg_text = self.book_texts_map.get(potential_neg_id)
-                            if potential_neg_text is not None:
-                                negative_id = potential_neg_id
-                                negative_text = potential_neg_text
-                                break # Found a negative
-
-                    if negative_id and negative_text:
-                        triplet_data.append({
-                            'anchor': anchor_text,
-                            'positive': positive_text,
-                            'negative': negative_text
-                        })
-                    # else:
-                        # logging.warning(f"Could not find suitable negative for anchor {anchor_id}, positive {positive_id}")
-
-            except KeyError:
-                logging.warning(f"Anchor book ID {anchor_id} not found in books_df. Skipping.")
-                continue
-            except Exception as e:
-                 logging.error(f"Error processing anchor {anchor_id}: {e}", exc_info=True)
-                 continue
-
-            processed_anchors += 1
-            if processed_anchors % 1000 == 0:
-                 logging.info(f"Processed {processed_anchors} anchors...")
-
-
-        self.triplets_df = pd.DataFrame(triplet_data)
-        logging.info(f"Generated {len(self.triplets_df)} triplets.")
-
-    def save_triplets(self) -> None:
-        """Saves the generated triplets to a Parquet file."""
-        if self.triplets_df is None:
-            self.generate_triplets()
-
-        if not self.triplets_df.empty:
-            logging.info(f"Saving triplets to {self.output_path}")
-            self.triplets_df.to_parquet(self.output_path, index=False)
-            logging.info("Triplets saved successfully.")
-            print("\n--- Sample Triplets ---")
-            print(self.triplets_df.head())
-            print("-----------------------\n")
-        else:
-            logging.warning("No triplets were generated, skipping save.")
-
-    def get_triplets_df(self) -> pd.DataFrame:
-        """Returns the triplets DataFrame."""
-        if self.triplets_df is None:
-             # Try loading if not generated in this run
-            if os.path.exists(self.output_path):
-                logging.info(f"Loading existing triplets from {self.output_path}")
-                self.triplets_df = pd.read_parquet(self.output_path)
-            else:
-                self.generate_triplets()
-                self.save_triplets()
-        return self.triplets_df
-
-
-class DatasetSplitter:
-    """Splits the dataset into train, validation, and test sets."""
-    def __init__(self, data_path: str, test_size: float, val_size: float, seed: int):
-        self.data_path = data_path
-        self.test_size = test_size
-        self.val_size = val_size # Relative to the test split
-        self.seed = seed
-        self.train_dataset = None
-        self.validation_dataset = None
-        self.test_dataset = None
-
-    def split_data(self) -> None:
-        """Loads and splits the data using Hugging Face datasets."""
-        logging.info(f"Loading dataset from {self.data_path}")
-        full_dataset = load_dataset('parquet', data_files=self.data_path, split='train')
-
-        logging.info(f"Splitting data: test_size={self.test_size}, validation_size={self.val_size} (relative)")
-        train_testvalid_split = full_dataset.train_test_split(test_size=self.test_size, seed=self.seed)
-        self.train_dataset = train_testvalid_split['train']
-        test_valid_dataset = train_testvalid_split['test']
-
-        test_validation_split = test_valid_dataset.train_test_split(test_size=self.val_size, seed=self.seed)
-        self.validation_dataset = test_validation_split['train']
-        self.test_dataset = test_validation_split['test']
-
-        logging.info(f"Split complete: Train={len(self.train_dataset)}, Validation={len(self.validation_dataset)}, Test={len(self.test_dataset)}")
-
-    def get_datasets(self) -> Tuple[Any, Any, Any]:
-        """Returns the split datasets."""
-        if not all([self.train_dataset, self.validation_dataset, self.test_dataset]):
-            self.split_data()
-        return self.train_dataset, self.validation_dataset, self.test_dataset
-
-    def get_split_texts(self, dataset_type: str = 'validation') -> Tuple[List[str], List[str], List[str]]:
-        """Extracts anchor, positive, negative texts from a specified dataset split."""
-        if not all([self.train_dataset, self.validation_dataset, self.test_dataset]):
-            self.split_data()
-
-        dataset = None
-        if dataset_type == 'validation':
-            dataset = self.validation_dataset
-        elif dataset_type == 'test':
-            dataset = self.test_dataset
-        else:
-            raise ValueError("dataset_type must be 'validation' or 'test'")
-
-        if dataset is None:
-             raise RuntimeError("Dataset not loaded or split correctly.")
-
-        logging.info(f"Extracting texts for {dataset_type} set...")
-        anchors = dataset['anchor']
-        positives = dataset['positive']
-        negatives = dataset['negative']
-        logging.info(f"Extracted {len(anchors)} {dataset_type} triplets.")
-        # Optional: Print samples
-        # print(f"\n--- Sample {dataset_type.capitalize()} Triplets ---")
-        # print(f"{dataset_type.capitalize()} Anchors:", anchors[:3])
-        # print(f"{dataset_type.capitalize()} Positives:", positives[:3])
-        # print(f"{dataset_type.capitalize()} Negatives:", negatives[:3])
-        # print("-----------------------------------\n")
-        return anchors, positives, negatives
-
-
-class ModelTrainerEvaluator:
-    """Handles model loading, training, and evaluation."""
-    def __init__(self, model_name: str, output_path: str, eval_output_path: str, checkpoint_path: str, device: str, config: Dict):
-        self.model_name = model_name
-        self.output_path = output_path
-        self.eval_output_path = eval_output_path
-        self.checkpoint_path = checkpoint_path
-        self.device = device
-        self.config = config # Store hyperparameters
-        self.baseline_model = SentenceTransformer(model_name, device=device)
-        self.finetuned_model: Optional[SentenceTransformer] = None
-        self.baseline_accuracy: Optional[float] = None
-        self.finetuned_accuracy: Optional[float] = None
-
-    def _create_evaluator(self, anchors: List[str], positives: List[str], negatives: List[str], name: str, write_csv: bool = False) -> TripletEvaluator:
-        """Helper to create a TripletEvaluator."""
-        return TripletEvaluator(
-            anchors=anchors,
-            positives=positives,
-            negatives=negatives,
-            main_similarity_function='cosine', # Or other similarity
-            margin=self.config['triplet_margin'],
-            name=name,
-            show_progress_bar=True,
-            write_csv=write_csv,
-            batch_size=self.config['batch_size'] * 2 # Often can use larger batch for eval
-        )
-
-    def evaluate_baseline(self, test_anchors: List[str], test_positives: List[str], test_negatives: List[str]) -> float:
-        """Evaluates the baseline model performance on the test set."""
-        logging.info("Evaluating baseline model...")
-        baseline_evaluator = self._create_evaluator(test_anchors, test_positives, test_negatives, name='baseline-test')
-        results = baseline_evaluator(self.baseline_model, output_path=self.eval_output_path)
-        # The key might be 'accuracy_cosine' or similar depending on TripletEvaluator version/config
-        primary_metric = baseline_evaluator.primary_metric
-        self.baseline_accuracy = results.get(primary_metric, results.get('accuracy_cosine')) # Try common keys
-        if self.baseline_accuracy is None:
-             logging.error(f"Could not find primary metric '{primary_metric}' or 'accuracy_cosine' in baseline results: {results}")
-             raise KeyError("Baseline accuracy metric not found in evaluation results.")
-
-        logging.info(f"Baseline Test Accuracy ({primary_metric}): {self.baseline_accuracy:.4f}")
-        return self.baseline_accuracy
-
-    def train(self, train_dataset: Any, val_anchors: List[str], val_positives: List[str], val_negatives: List[str]) -> None:
-        """Fine-tunes the model."""
-        logging.info("Preparing for fine-tuning...")
-
-        # Define Loss Function
-        train_loss = losses.TripletLoss(
-            model=self.baseline_model, # Start fine-tuning from the baseline
-            distance_metric=losses.SiameseDistanceMetric.COSINE_DISTANCE,
-            triplet_margin=self.config['triplet_margin'],
-        )
-
-        # Create Data Loader
-        train_examples = [InputExample(texts=[ex['anchor'], ex['positive'], ex['negative']]) for ex in train_dataset]
-        logging.info(f"Created {len(train_examples)} training examples.")
-        train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=self.config['batch_size'])
-
-        # Define Validation Evaluator
-        validation_evaluator = self._create_evaluator(val_anchors, val_positives, val_negatives, name='validation', write_csv=True)
-
-        # Calculate Warmup Steps
-        num_training_steps = len(train_dataloader) * self.config['epochs']
-        warmup_steps = int(num_training_steps * self.config['warmup_steps_ratio'])
-        logging.info(f"Total training steps: {num_training_steps}, Warmup steps: {warmup_steps}")
-
-        # Fitting the Model
-        logging.info("--- Starting Fine-tuning ---")
-        self.baseline_model.fit(
-            train_objectives=[(train_dataloader, train_loss)],
-            evaluator=validation_evaluator,
-            epochs=self.config['epochs'],
-            evaluation_steps=self.config['evaluation_steps'],
-            warmup_steps=warmup_steps,
-            output_path=self.output_path, # Saves the best model here
-            save_best_model=True,
-            optimizer_params={'lr': self.config['learning_rate']},
-            checkpoint_path=self.checkpoint_path,
-            checkpoint_save_steps=self.config['save_steps'],
-            checkpoint_save_total_limit=self.config['checkpoint_limit'],
-            output_path_ignore_not_empty=True # Allow overwriting if needed
-        )
-        logging.info("--- Fine-tuning Finished ---")
-
-        # Load the best model saved by fit
-        logging.info(f"Loading best fine-tuned model from: {self.output_path}")
-        self.finetuned_model = SentenceTransformer(self.output_path, device=self.device)
-
-
-    def evaluate_finetuned(self, test_anchors: List[str], test_positives: List[str], test_negatives: List[str]) -> float:
-        """Evaluates the fine-tuned model performance on the test set."""
-        if self.finetuned_model is None:
-            # Try loading if not trained in this run
-            if os.path.exists(self.output_path):
-                 logging.info(f"Loading existing fine-tuned model from: {self.output_path}")
-                 self.finetuned_model = SentenceTransformer(self.output_path, device=self.device)
-            else:
-                raise RuntimeError("Fine-tuned model not available. Train the model first or ensure the output path exists.")
-
-        logging.info("Evaluating fine-tuned model on test set...")
-        final_test_evaluator = self._create_evaluator(test_anchors, test_positives, test_negatives, name='finetuned-test')
-        results = final_test_evaluator(self.finetuned_model, output_path=self.eval_output_path)
-
-        primary_metric = final_test_evaluator.primary_metric
-        self.finetuned_accuracy = results.get(primary_metric, results.get('accuracy_cosine'))
-        if self.finetuned_accuracy is None:
-             logging.error(f"Could not find primary metric '{primary_metric}' or 'accuracy_cosine' in fine-tuned results: {results}")
-             raise KeyError("Fine-tuned accuracy metric not found in evaluation results.")
-
-        logging.info(f"Fine-tuned Test Accuracy ({primary_metric}): {self.finetuned_accuracy:.4f}")
-        return self.finetuned_accuracy
-
-    def get_accuracies(self) -> Tuple[Optional[float], Optional[float]]:
-        """Returns the baseline and fine-tuned accuracies."""
-        return self.baseline_accuracy, self.finetuned_accuracy
-
-
-class ResultVisualizer:
-    """Plots the training validation performance and final comparison."""
-    def __init__(self, eval_output_path: str, output_base_path: str):
-        self.eval_output_path = eval_output_path
-        self.output_base_path = output_base_path
-
-    def plot_validation_accuracy(self) -> None:
-        """Plots the validation accuracy recorded during training."""
-        logging.info("--- Plotting Validation Performance ---")
-        eval_filepath = os.path.join(self.eval_output_path, "triplet_evaluation_validation_results.csv")
-        plot_save_path = os.path.join(self.output_base_path, 'validation_accuracy_plot.png')
-
-        try:
-            eval_results = pd.read_csv(eval_filepath)
-            # Adjust column name based on actual output (might be accuracy_cosine, accuracy_dot, etc.)
-            accuracy_col = None
-            if 'accuracy_cosine' in eval_results.columns:
-                accuracy_col = 'accuracy_cosine'
-            elif 'accuracy_dot' in eval_results.columns: # Example alternative
-                 accuracy_col = 'accuracy_dot'
-            # Add more potential column names if needed
-
-            if 'steps' in eval_results.columns and accuracy_col:
-                plt.figure(figsize=(10, 5))
-                plt.plot(eval_results['steps'], eval_results[accuracy_col], marker='o', linestyle='-')
-                plt.title('Validation Accuracy during Fine-tuning')
-                plt.xlabel('Training Steps')
-                plt.ylabel(f'{accuracy_col.replace("_", " ").title()}')
-                plt.grid(True)
-                plt.savefig(plot_save_path)
-                logging.info(f"Validation plot saved to: {plot_save_path}")
-                # plt.show() # Optionally display plot immediately
-                plt.close() # Close plot to free memory
-            else:
-                logging.warning(f"Columns 'steps' or a suitable accuracy column not found in {eval_filepath}. Cannot plot validation accuracy.")
-
-        except FileNotFoundError:
-            logging.warning(f"Evaluation results file not found at: {eval_filepath}. Plotting skipped.")
-        except Exception as e:
-            logging.error(f"An error occurred during validation plotting: {e}", exc_info=True)
-
-    def plot_comparison(self, baseline_acc: float, finetuned_acc: float) -> None:
-        """Plots the comparison bar chart of baseline vs fine-tuned accuracy."""
-        logging.info("--- Plotting Results Comparison ---")
-        plot_save_path = os.path.join(self.output_base_path, 'comparison_accuracy_plot.png')
-
-        improvement = finetuned_acc - baseline_acc
-        improvement_percent = (improvement / baseline_acc * 100) if baseline_acc != 0 else 0
-
-        print("\n--- Results Comparison ---")
-        print(f"Baseline Test Accuracy:   {baseline_acc:.4f}")
-        print(f"Fine-tuned Test Accuracy: {finetuned_acc:.4f}")
-        print(f"Improvement:              {improvement:.4f} ({improvement_percent:.1f}%)")
-        print("--------------------------\n")
-
-        labels = ['Baseline', 'Fine-tuned']
-        accuracies = [baseline_acc, finetuned_acc]
-
-        plt.figure(figsize=(6, 4))
-        bars = plt.bar(labels, accuracies, color=['skyblue', 'lightgreen'])
-        for bar in bars:
-            yval = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2.0, yval, f'{yval:.4f}', va='bottom', ha='center')
-
-        plt.ylabel('Accuracy (Cosine)') # Assuming cosine, adjust if needed
-        plt.title('Baseline vs. Fine-tuned Model Accuracy')
-        plt.ylim(0, max(accuracies) * 1.15) # Adjust y-axis limit
-        plt.savefig(plot_save_path)
-        logging.info(f"Comparison plot saved to: {plot_save_path}")
-        # plt.show() # Optionally display plot immediately
-        plt.close() # Close plot
+from utils import send_discord_webhook
 
 
 class SbertTrainerStep(PipelineStep):
     def __init__(self, name: str):
         super().__init__(name)
-        # Defaults (can be overridden by config)
+        # Default configuration - will be overridden by configure()
         self.random_state = 42
         self.model_name = 'all-MiniLM-L6-v2'
         self.books_data_file = "data/reduced_books.parquet"
         self.authors_data_file = "data/new_authors.parquet"
         self.book_texts_file = "data/book_texts.parquet"
         self.triplets_data_file = "data/books_triplets.parquet"
-        self.output_base_path = "sbert-output/finetuning-all-MiniLM-L6-v2-books"
+        self.output_base_path = "results/sbert"
         self.eval_output_path = os.path.join(self.output_base_path, 'eval')
         self.checkpoint_path = os.path.join(self.output_base_path, 'checkpoints')
         self.batch_size = 32
@@ -627,107 +55,617 @@ class SbertTrainerStep(PipelineStep):
         torch.manual_seed(self.random_state)
         random.seed(self.random_state)
 
+    def _send_notification(self, title: str, description: str, color: int = 0x00FF00, fields: list = None, error: bool = False):
+        """Send a Discord notification with consistent formatting."""
+        try:
+            embed = {
+                "title": f"🧠 {title}" if not error else f"❌ {title}",
+                "description": description,
+                "color": color if not error else 0xFF0000,  # Red for errors
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "footer": {"text": f"Pipeline Step: {self.name}"}
+            }
+            
+            if fields:
+                embed["fields"] = fields
+                
+            send_discord_webhook(
+                content=None,
+                embed=embed,
+                username="BookDB Pipeline"
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to send Discord notification: {e}")
+
     def configure(self, config: Dict[str, Any]) -> None:
         super().configure(config)
-        self.random_state = self.config.get('random_state', self.random_state)
-        self.model_name = self.config.get('model_name', self.model_name)
-        self.books_data_file = self.config.get('books_data_file', self.books_data_file)
-        self.authors_data_file = self.config.get('authors_data_file', self.authors_data_file)
-        self.book_texts_file = self.config.get('book_texts_file', self.book_texts_file)
-        self.triplets_data_file = self.config.get('triplets_data_file', self.triplets_data_file)
-        self.output_base_path = self.config.get('output_base_path', self.output_base_path)
-        self.eval_output_path = self.config.get('eval_output_path', os.path.join(self.output_base_path, 'eval'))
-        self.checkpoint_path = self.config.get('checkpoint_path', os.path.join(self.output_base_path, 'checkpoints'))
-        self.batch_size = self.config.get('batch_size', self.batch_size)
-        self.epochs = self.config.get('epochs', self.epochs)
-        self.learning_rate = self.config.get('learning_rate', self.learning_rate)
-        self.triplet_margin = self.config.get('triplet_margin', self.triplet_margin)
-        self.warmup_steps_ratio = self.config.get('warmup_steps_ratio', self.warmup_steps_ratio)
-        self.evaluation_steps = self.config.get('evaluation_steps', self.evaluation_steps)
-        self.save_steps = self.config.get('save_steps', self.save_steps)
-        self.checkpoint_limit = self.config.get('checkpoint_limit', self.checkpoint_limit)
-        self.test_split_size = self.config.get('test_split_size', self.test_split_size)
-        self.validation_split_size = self.config.get('validation_split_size', self.validation_split_size)
-        self.max_negative_search_attempts = self.config.get('max_negative_search_attempts', self.max_negative_search_attempts)
+        # Update configuration from config dict
+        for key, value in self.config.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        
+        # Ensure directories exist
         os.makedirs(self.output_base_path, exist_ok=True)
         os.makedirs(self.eval_output_path, exist_ok=True)
+        os.makedirs(os.path.dirname(self.book_texts_file), exist_ok=True)
+        os.makedirs(os.path.dirname(self.triplets_data_file), exist_ok=True)
+        
         self.device = get_device()
         self._set_seed()
 
+    def analyze_dataframe(self, df: dd.DataFrame) -> pd.DataFrame:
+        """Analyzes a Dask DataFrame for column info and nulls - matches finetune_sbert.py logic."""
+        self.logger.info("Analyzing DataFrame...")
+        cols = df.columns
+        dtypes = df.dtypes
+        total_rows = len(df.compute())
+        
+        results = []
+        for col in cols:
+            non_null_count = df[col].count().compute()
+            null_count = total_rows - non_null_count
+            null_percentage = (null_count / total_rows) * 100
+            results.append({
+                'Column': col,
+                'Data Type': str(dtypes[col]),
+                'Non-Null Count': non_null_count,
+                'Null Count': null_count,
+                'Null Percentage': f'{null_percentage:.2f}%'
+            })
+        
+        results_df = pd.DataFrame(results)
+        return results_df.sort_values('Null Percentage', ascending=False)
+
+    def extract_genres(self, popular_shelves: Any) -> List[str]:
+        """Extracts potential genres from popular shelves - exact logic from finetune_sbert.py."""
+        try:
+            if not isinstance(popular_shelves, np.ndarray) or len(popular_shelves) == 0:
+                return []
+            
+            found_genres = set()
+            
+            genre_keywords = [
+                'action', 'adventure', 'comedy', 'crime', 'mystery', 'textbook', 'children', 'mathematics', 'fantasy',
+                'historical', 'horror', 'romance', 'satire', 'science fiction',
+                'scifi', 'speculative fiction', 'thriller', 'western', 'paranormal',
+                'dystopian', 'urban fantasy', 'contemporary', 'young adult', 'ya',
+                'middle grade', 'children\'s', 'literary fiction', 'magic realism',
+                'historical fiction', 'gothic', 'suspense', 'biography', 'memoir',
+                'nonfiction', 'poetry', 'drama', 'historical romance',
+                'fantasy romance', 'romantic suspense', 'science fiction romance',
+                'contemporary romance', 'paranormal romance', 'epic fantasy',
+                'dark fantasy', 'sword and sorcery', 'steampunk', 'cyberpunk',
+                'apocalyptic', 'post-apocalyptic', 'alternate history',
+                'superhero', 'mythology', 'fairy tales', 'folklore', 'war',
+                'military fiction', 'spy fiction', 'political fiction', 'social science fiction',
+                'techno-thriller', 'medical thriller', 'legal thriller',
+                'psychological thriller', 'cozy mystery', 'hardboiled', 'noir',
+                'coming-of-age', 'lgbtq+', 'christian fiction', 'religious fiction',
+                'humor', 'travel', 'food', 'cooking', 'health', 'self-help',
+                'business', 'finance', 'history', 'science', 'technology', 'nature',
+                'art', 'music', 'philosophy', 'education', 'true crime', 'spiritual',
+                'anthology', 'short stories', 'plays', 'screenplays', 'graphic novel',
+                'comics', 'manga', 'erotica', 'new adult', 'chick lit', 'womens fiction',
+                'sports fiction', 'family saga', ' Regency romance', 'literature'
+            ]
+            # Sort keywords by length descending to match longer phrases first
+            genre_keywords.sort(key=len, reverse=True)
+
+            ignore_keywords = ['to-read', 'owned', 'hardcover', 'shelfari-favorites', 'series', 'might-read',
+                           'dnf-d', 'hambly-barbara', 'strong-females', 'first-in-series',
+                           'no-thanks-series-collections-boxes', 'entertaining-but-limited',
+                           'kate-own', 'e-book', 'compliation', 'my-books',
+                           'books-i-own-but-have-not-read', 'everything-owned', 'books-to-find',
+                           'i-own-it', 'favorite', 'not-read', 'read-some-day', 'library',
+                           'audiobooks', 'status-borrowed', 'owned-books',
+                           'spec-fic-awd-locus-nom', '01', 'hardbacks', 'paper', 'german',
+                           'hardback', 'physical-scifi-fantasy', 'childhood-favorites',
+                           'bundle-same-author', 'aa-sifi-fantasy', 'ready-to-read',
+                           'bought-on-flee-markets', 'fantasy-general', 'hardcopy', 'box-2',
+                           'unfinished', 'magic', 'duplicates', 'favorites', 'books-i-own',
+                           'fantasy-classic', 'own-hard-copy', 'fantasy-read',
+                           'book-club-edition', 'sci-fi-or-fantasy', 'fiction-fantasy',
+                           'fiction-literature-poetry', 'paused-hiatus', 'status—borrowed',
+                           'recs-fantasy', 'fantasy-scifi', 'omnibus', 'speculative',
+                           'sf--fantasy', 'in-my-home-library', 'fant-myth-para-vamps',
+                           'read-in-my-20s']
+
+            for shelf in popular_shelves:
+                if not isinstance(shelf, dict) or 'name' not in shelf:
+                    continue
+                
+                shelf_name = shelf['name'].lower().strip()
+
+                # Skip if shelf name contains any ignore keywords
+                if any(ignore in shelf_name for ignore in ignore_keywords):
+                    continue
+
+                # Check if any genre keyword is present in the shelf name
+                for keyword in genre_keywords:
+                    if keyword in shelf_name: 
+                        found_genres.add(keyword)
+
+            return sorted(list(found_genres))
+        except Exception as e:
+            self.logger.error(f"Error in extract_genres function: {e}", exc_info=True)
+            return []
+
+    def create_book_texts(self, books_df: pd.DataFrame, authors_df: pd.DataFrame) -> pd.DataFrame:
+        """Creates book text representations - exact logic from finetune_sbert.py."""
+        try:
+            self.logger.info("Creating book text representations...")
+            
+            book_texts = []
+            total_books = len(books_df)
+            valid_books = 0
+            
+            for index, row in books_df.iterrows():
+                if row['description'] == '' or row['title'] == '':
+                    continue
+                if row['description'] is None or row['title'] is None:
+                    continue
+                    
+                genres = self.extract_genres(row['popular_shelves'])
+                authors = []
+                for author_id in row['authors']:
+                    author = authors_df.loc[authors_df['author_id'] == author_id]
+                    if not author.empty:
+                        authors.append(author.iloc[0]['name'])
+                
+                book_text = f"Title: {row['title']} | Genres: {', '.join(genres)} | Description: {row['description']} | Authors: {', '.join(authors)}"
+                book_texts.append({'book_id': index, 'text': book_text})
+                valid_books += 1
+
+            book_texts_df = pd.DataFrame(book_texts)
+            self.logger.info(f"Created {len(book_texts_df)} book text entries.")
+            
+            # Send success notification
+            self._send_notification(
+                "Book Text Generation Complete",
+                f"Successfully created text representations for SBERT training",
+                fields=[
+                    {"name": "Total Books", "value": f"{total_books:,}", "inline": True},
+                    {"name": "Valid Books", "value": f"{valid_books:,}", "inline": True},
+                    {"name": "Success Rate", "value": f"{valid_books/total_books*100:.1f}%", "inline": True},
+                    {"name": "Text Format", "value": "Title | Genres | Description | Authors", "inline": False},
+                    {"name": "Output File", "value": f"`{os.path.basename(self.book_texts_file)}`", "inline": True}
+                ]
+            )
+            
+            return book_texts_df
+        except Exception as e:
+            error_msg = f"Failed to create book texts: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Book Text Generation Failed",
+                error_msg,
+                error=True
+            )
+            raise
+
+    def generate_triplets(self, books_df: pd.DataFrame, book_texts_df: pd.DataFrame) -> pd.DataFrame:
+        """Generates triplets for training - exact logic from finetune_sbert.py."""
+        try:
+            self.logger.info("Starting triplet generation...")
+            
+            # Create a dictionary for faster text lookup
+            book_texts_map = book_texts_df.set_index('book_id')['text'].to_dict()
+            all_book_ids_with_text = list(book_texts_map.keys())
+            
+            triplet_data = []
+            anchor_count = 0
+            positive_count = 0
+            failed_negatives = 0
+            
+            # Iterate through books that have text representations
+            for anchor_id, anchor_text in book_texts_map.items():
+                try:
+                    anchor_info = books_df.loc[anchor_id]
+                    similar_books = anchor_info.get('similar_books', [])
+
+                    if len(similar_books) == 0:
+                        continue
+
+                    anchor_count += 1
+                    # Set of IDs that cannot be negative samples
+                    forbidden_ids = {anchor_id} | set(similar_books)
+
+                    # Iterate through positively related books
+                    for positive_id in similar_books:
+                        # Get positive text, skip if not found in our text map
+                        positive_text = book_texts_map.get(int(positive_id))
+                        if positive_text is None:
+                            continue
+
+                        positive_count += 1
+                        
+                        # Find a suitable negative sample
+                        negative_id = None
+                        negative_text = None
+                        for _ in range(self.max_negative_search_attempts):
+                            potential_neg_id = random.choice(all_book_ids_with_text)
+                            
+                            if potential_neg_id in forbidden_ids:
+                                continue
+                            
+                            potential_neg_text = book_texts_map.get(potential_neg_id)
+                            if potential_neg_text is not None:
+                                negative_id = potential_neg_id
+                                negative_text = potential_neg_text
+                                break
+
+                        # If a suitable negative was found, add the triplet
+                        if negative_id and negative_text:
+                            triplet_data.append({
+                                'anchor': anchor_text,
+                                'positive': positive_text,
+                                'negative': negative_text
+                            })
+                        else:
+                            failed_negatives += 1
+
+                except KeyError:
+                    self.logger.warning(f"Anchor book ID {anchor_id} not found in books_df.")
+                    continue
+
+            triplets_df = pd.DataFrame(triplet_data)
+            self.logger.info(f"Generated {len(triplets_df)} triplets.")
+            
+            # Send success notification
+            self._send_notification(
+                "Triplet Generation Complete",
+                f"Successfully generated training triplets for SBERT model",
+                fields=[
+                    {"name": "Books with Text", "value": f"{len(book_texts_map):,}", "inline": True},
+                    {"name": "Anchors Processed", "value": f"{anchor_count:,}", "inline": True},
+                    {"name": "Positive Pairs", "value": f"{positive_count:,}", "inline": True},
+                    {"name": "Generated Triplets", "value": f"{len(triplets_df):,}", "inline": True},
+                    {"name": "Failed Negatives", "value": f"{failed_negatives:,}", "inline": True},
+                    {"name": "Success Rate", "value": f"{len(triplets_df)/positive_count*100:.1f}%" if positive_count > 0 else "0%", "inline": True},
+                    {"name": "Output File", "value": f"`{os.path.basename(self.triplets_data_file)}`", "inline": False}
+                ]
+            )
+            
+            return triplets_df
+        except Exception as e:
+            error_msg = f"Failed to generate triplets: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Triplet Generation Failed",
+                error_msg,
+                error=True
+            )
+            raise
+
     def run(self) -> Dict[str, Any]:
+        """Execute the SBERT training pipeline - matches finetune_sbert.py exactly."""
         self.logger.info("Starting SBERT fine-tuning step...")
+        
+        # Send pipeline start notification
+        self._send_notification(
+            "SBERT Training Started",
+            f"Beginning SBERT fine-tuning pipeline: **{self.name}**",
+            color=0x0099FF,  # Blue for start
+            fields=[
+                {"name": "Base Model", "value": f"`{self.model_name}`", "inline": True},
+                {"name": "Device", "value": f"{self.device}", "inline": True},
+                {"name": "Epochs", "value": f"{self.epochs}", "inline": True},
+                {"name": "Batch Size", "value": f"{self.batch_size}", "inline": True},
+                {"name": "Learning Rate", "value": f"{self.learning_rate}", "inline": True},
+                {"name": "Triplet Margin", "value": f"{self.triplet_margin}", "inline": True}
+            ]
+        )
+        
         outputs = {}
-        # 1. Load and Analyze Data
-        loader_analyzer = DataLoaderAnalyzer(
-            books_path=self.books_data_file,
-            authors_path=self.authors_data_file
-        )
-        loader_analyzer.run_analysis()
-        books_df, authors_df = loader_analyzer.get_dataframes()
-        # 2. Preprocess Text Data
-        text_preprocessor = TextPreprocessor(
-            books_df=books_df,
-            authors_df=authors_df,
-            output_path=self.book_texts_file
-        )
-        book_texts_df = text_preprocessor.get_book_texts_df()
-        outputs["book_texts_parquet"] = self.book_texts_file
-        # 3. Generate Triplets
-        triplet_generator = TripletGenerator(
-            books_df=books_df,
-            book_texts_df=book_texts_df,
-            output_path=self.triplets_data_file,
-            max_neg_attempts=self.max_negative_search_attempts
-        )
-        triplet_generator.get_triplets_df()
-        outputs["triplets_parquet"] = self.triplets_data_file
-        # 4. Split Data
-        dataset_splitter = DatasetSplitter(
-            data_path=self.triplets_data_file,
-            test_size=self.test_split_size,
-            val_size=self.validation_split_size,
-            seed=self.random_state
-        )
-        train_ds, val_ds, test_ds = dataset_splitter.get_datasets()
-        val_anchors, val_positives, val_negatives = dataset_splitter.get_split_texts('validation')
-        test_anchors, test_positives, test_negatives = dataset_splitter.get_split_texts('test')
-        # 5. Evaluate Baseline Model
-        trainer_evaluator = ModelTrainerEvaluator(
-            model_name=self.model_name,
-            output_path=self.output_base_path,
-            eval_output_path=self.eval_output_path,
-            checkpoint_path=self.checkpoint_path,
-            device=self.device,
-            config={
-                'batch_size': self.batch_size,
-                'epochs': self.epochs,
-                'learning_rate': self.learning_rate,
-                'triplet_margin': self.triplet_margin,
-                'warmup_steps_ratio': self.warmup_steps_ratio,
-                'evaluation_steps': self.evaluation_steps,
-                'save_steps': self.save_steps,
-                'checkpoint_limit': self.checkpoint_limit
-            }
-        )
-        baseline_acc = trainer_evaluator.evaluate_baseline(test_anchors, test_positives, test_negatives)
-        # 6. Train Model
-        trainer_evaluator.train(train_ds, val_anchors, val_positives, val_negatives)
-        # 7. Evaluate Fine-tuned Model
-        finetuned_acc = trainer_evaluator.evaluate_finetuned(test_anchors, test_positives, test_negatives)
-        outputs["baseline_accuracy"] = baseline_acc
-        outputs["finetuned_accuracy"] = finetuned_acc
-        outputs["best_model_path"] = self.output_base_path
-        outputs["eval_output_path"] = self.eval_output_path
-        outputs["checkpoint_path"] = self.checkpoint_path
-        # 8. Visualize Results
-        visualizer = ResultVisualizer(
-            eval_output_path=self.eval_output_path,
-            output_base_path=self.output_base_path
-        )
-        visualizer.plot_validation_accuracy()
-        visualizer.plot_comparison(baseline_acc, finetuned_acc)
-        outputs["validation_plot"] = os.path.join(self.output_base_path, 'validation_accuracy_plot.png')
-        outputs["comparison_plot"] = os.path.join(self.output_base_path, 'comparison_accuracy_plot.png')
-        self.logger.info("SBERT fine-tuning step finished.")
-        self.output_data = outputs
-        return outputs
+
+        try:
+            # 1. Load and analyze data
+            self.logger.info("Loading and analyzing data...")
+            books_df = dd.read_parquet(self.books_data_file)
+            
+            # Display analysis like in finetune_sbert.py
+            analysis_results = self.analyze_dataframe(books_df)
+            print("DataFrame Analysis:")
+            print(analysis_results)
+            
+            books_df = books_df.compute()
+            books_df.set_index('book_id', inplace=True)
+            
+            authors_df = dd.read_parquet(self.authors_data_file).compute()
+            
+            # Send data loading notification
+            self._send_notification(
+                "Data Loading Complete",
+                f"Successfully loaded and analyzed datasets",
+                fields=[
+                    {"name": "Books Loaded", "value": f"{len(books_df):,}", "inline": True},
+                    {"name": "Authors Loaded", "value": f"{len(authors_df):,}", "inline": True},
+                    {"name": "Books File", "value": f"`{os.path.basename(self.books_data_file)}`", "inline": True},
+                    {"name": "Authors File", "value": f"`{os.path.basename(self.authors_data_file)}`", "inline": True}
+                ]
+            )
+
+            # 2. Create book texts
+            book_texts_df = self.create_book_texts(books_df, authors_df)
+            book_texts_df.to_parquet(self.book_texts_file, index=False)
+            outputs["book_texts_parquet"] = self.book_texts_file
+
+            # 3. Generate triplets
+            triplets_df = self.generate_triplets(books_df, book_texts_df)
+            
+            if not triplets_df.empty:
+                triplets_df.to_parquet(self.triplets_data_file, index=False)
+                print(f"Successfully saved triplets to {self.triplets_data_file}")
+                print("Sample triplets:")
+                print(triplets_df.head())
+            else:
+                error_msg = "No triplets were generated."
+                self.logger.error(error_msg)
+                self._send_notification(
+                    "SBERT Training Failed",
+                    error_msg,
+                    error=True
+                )
+                return outputs
+            
+            outputs["triplets_parquet"] = self.triplets_data_file
+
+            # 4. Data loading & splitting
+            self.logger.info("Loading and splitting dataset...")
+            full_dataset = load_dataset('parquet', data_files=self.triplets_data_file, split='train')
+            
+            # Split exactly like finetune_sbert.py
+            train_testvalid_split = full_dataset.train_test_split(test_size=self.test_split_size, seed=self.random_state)
+            train_dataset = train_testvalid_split['train']
+            test_valid_dataset = train_testvalid_split['test']
+            
+            test_validation_split = test_valid_dataset.train_test_split(test_size=self.validation_split_size, seed=self.random_state)
+            validation_dataset = test_validation_split['train']
+            test_dataset = test_validation_split['test']
+            
+            val_anchors = validation_dataset['anchor']
+            val_positives = validation_dataset['positive']
+            val_negatives = validation_dataset['negative']
+            
+            test_anchors = test_dataset['anchor']
+            test_positives = test_dataset['positive']
+            test_negatives = test_dataset['negative']
+            
+            self.logger.info(f"Train size: {len(train_dataset)}")
+            self.logger.info(f"Validation size: {len(validation_dataset)}")
+            self.logger.info(f"Test size: {len(test_dataset)}")
+            
+            # Send data splitting notification
+            self._send_notification(
+                "Dataset Splitting Complete",
+                f"Successfully split dataset for training and evaluation",
+                fields=[
+                    {"name": "Total Triplets", "value": f"{len(full_dataset):,}", "inline": True},
+                    {"name": "Training Set", "value": f"{len(train_dataset):,}", "inline": True},
+                    {"name": "Validation Set", "value": f"{len(validation_dataset):,}", "inline": True},
+                    {"name": "Test Set", "value": f"{len(test_dataset):,}", "inline": True},
+                    {"name": "Test Split", "value": f"{self.test_split_size*100:.0f}%", "inline": True},
+                    {"name": "Val Split", "value": f"{self.validation_split_size*100:.0f}%", "inline": True}
+                ]
+            )
+
+            # 5. Baseline performance
+            self.logger.info("Evaluating baseline model...")
+            baseline_model = SentenceTransformer(self.model_name, device=self.device)
+            
+            baseline_evaluator = TripletEvaluator(
+                anchors=test_anchors,
+                positives=test_positives,
+                negatives=test_negatives,
+                main_similarity_function='cosine',
+                margin=self.triplet_margin,
+            )
+            
+            baseline_results = baseline_evaluator(baseline_model)
+            baseline_accuracy = baseline_results[baseline_evaluator.primary_metric]
+            self.logger.info(f"Baseline accuracy: {baseline_accuracy:.4f}")
+            outputs["baseline_accuracy"] = baseline_accuracy
+            
+            # Send baseline evaluation notification
+            self._send_notification(
+                "Baseline Model Evaluation Complete",
+                f"Evaluated pre-trained model performance",
+                fields=[
+                    {"name": "Model", "value": f"`{self.model_name}`", "inline": True},
+                    {"name": "Test Accuracy", "value": f"{baseline_accuracy:.4f}", "inline": True},
+                    {"name": "Similarity Function", "value": "Cosine", "inline": True},
+                    {"name": "Evaluation Set", "value": f"{len(test_dataset):,} triplets", "inline": True}
+                ]
+            )
+
+            # 6. Fine-tuning
+            self.logger.info("Starting fine-tuning...")
+            
+            # Send fine-tuning start notification
+            self._send_notification(
+                "Fine-tuning Started",
+                f"Beginning SBERT model fine-tuning process",
+                color=0xFFA500,  # Orange for progress
+                fields=[
+                    {"name": "Training Examples", "value": f"{len(train_dataset):,}", "inline": True},
+                    {"name": "Epochs", "value": f"{self.epochs}", "inline": True},
+                    {"name": "Batch Size", "value": f"{self.batch_size}", "inline": True},
+                    {"name": "Learning Rate", "value": f"{self.learning_rate}", "inline": True}
+                ]
+            )
+            
+            # Define loss function
+            train_loss = losses.TripletLoss(
+                model=baseline_model,
+                distance_metric=losses.SiameseDistanceMetric.COSINE_DISTANCE,
+                triplet_margin=self.triplet_margin,
+            )
+            
+            # Create data loader
+            train_examples = []
+            for i in range(len(train_dataset)):
+                example = train_dataset[i]
+                train_examples.append(InputExample(texts=[example['anchor'], example['positive'], example['negative']]))
+            
+            self.logger.info(f"Created {len(train_examples)} training examples.")
+            train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=self.batch_size)
+            
+            # Define validation evaluator
+            validation_evaluator = TripletEvaluator(
+                anchors=val_anchors,
+                positives=val_positives,
+                negatives=val_negatives,
+                name='validation',
+                show_progress_bar=True,
+                write_csv=True 
+            )
+            
+            # Calculate warmup steps
+            num_training_steps = len(train_dataloader) * self.epochs
+            warmup_steps = int(num_training_steps * self.warmup_steps_ratio)
+            self.logger.info(f"Total training steps: {num_training_steps}")
+            self.logger.info(f"Warmup steps: {warmup_steps}")
+            
+            # Fit the model
+            print("\n--- Starting Fine-tuning ---")
+            baseline_model.fit(
+                train_objectives=[(train_dataloader, train_loss)],
+                evaluator=validation_evaluator,
+                epochs=self.epochs,
+                evaluation_steps=self.evaluation_steps,
+                warmup_steps=warmup_steps,
+                output_path=self.output_base_path,
+                save_best_model=True,
+                optimizer_params={'lr': self.learning_rate},
+                checkpoint_path=self.checkpoint_path,
+                checkpoint_save_steps=self.save_steps,
+                checkpoint_save_total_limit=self.checkpoint_limit
+            )
+            print("--- Fine-tuning Finished ---")
+            
+            outputs["best_model_path"] = self.output_base_path
+            outputs["checkpoint_path"] = self.checkpoint_path
+            
+            # Send fine-tuning completion notification
+            self._send_notification(
+                "Fine-tuning Complete",
+                f"Successfully completed SBERT model fine-tuning",
+                fields=[
+                    {"name": "Training Steps", "value": f"{num_training_steps:,}", "inline": True},
+                    {"name": "Warmup Steps", "value": f"{warmup_steps:,}", "inline": True},
+                    {"name": "Model Path", "value": f"`{os.path.basename(self.output_base_path)}`", "inline": True},
+                    {"name": "Checkpoints", "value": f"`{os.path.basename(self.checkpoint_path)}`", "inline": True}
+                ]
+            )
+
+            # 7. Plot validation performance
+            self._plot_validation_performance()
+            outputs["validation_plot"] = os.path.join(self.output_base_path, 'validation_accuracy_plot.png')
+
+            # 8. Evaluate fine-tuned model
+            self.logger.info("Evaluating fine-tuned model...")
+            model_finetuned = SentenceTransformer(self.output_base_path, device=self.device)
+            
+            final_test_evaluator = TripletEvaluator(
+                anchors=test_anchors,
+                positives=test_positives,
+                negatives=test_negatives,
+                name='finetuned-test',
+                show_progress_bar=True
+            )
+            
+            finetuned_results = final_test_evaluator(model_finetuned, output_path=self.eval_output_path)
+            finetuned_accuracy = finetuned_results[final_test_evaluator.primary_metric]
+            self.logger.info(f"Fine-tuned accuracy: {finetuned_accuracy:.4f}")
+            outputs["finetuned_accuracy"] = finetuned_accuracy
+
+            # 9. Plot comparison
+            self._plot_comparison(baseline_accuracy, finetuned_accuracy)
+            outputs["comparison_plot"] = os.path.join(self.output_base_path, 'comparison_accuracy_plot.png')
+
+            # Calculate improvement
+            improvement = finetuned_accuracy - baseline_accuracy
+            improvement_pct = (improvement / baseline_accuracy) * 100 if baseline_accuracy > 0 else 0
+
+            self.logger.info("SBERT fine-tuning step finished.")
+            
+            # Send final completion notification
+            self._send_notification(
+                "SBERT Training Complete! 🎉",
+                f"Successfully completed entire SBERT fine-tuning pipeline: **{self.name}**",
+                color=0x00FF00,  # Green for success
+                fields=[
+                    {"name": "Baseline Accuracy", "value": f"{baseline_accuracy:.4f}", "inline": True},
+                    {"name": "Fine-tuned Accuracy", "value": f"{finetuned_accuracy:.4f}", "inline": True},
+                    {"name": "Improvement", "value": f"+{improvement:.4f} ({improvement_pct:+.1f}%)", "inline": True},
+                    {"name": "Training Data", "value": f"{len(train_dataset):,} triplets", "inline": True},
+                    {"name": "Model Type", "value": "Sentence-BERT", "inline": True},
+                    {"name": "Device Used", "value": f"{self.device}", "inline": True},
+                    {"name": "Model Output", "value": f"`{os.path.basename(self.output_base_path)}`", "inline": True},
+                    {"name": "Plots Generated", "value": "✅ Validation & Comparison", "inline": True}
+                ]
+            )
+            
+            self.output_data = outputs
+            return outputs
+            
+        except Exception as e:
+            error_msg = f"SBERT training pipeline failed: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "SBERT Training Pipeline Failed",
+                error_msg,
+                error=True
+            )
+            raise
+
+    def _plot_validation_performance(self):
+        """Plot validation performance during training."""
+        print("\n--- Plotting Validation Performance ---")
+        eval_filepath = os.path.join(self.eval_output_path, "triplet_evaluation_validation_results.csv")
+        
+        try:
+            eval_results = pd.read_csv(eval_filepath)
+            if 'steps' in eval_results.columns and 'accuracy_cosine' in eval_results.columns:
+                plt.figure(figsize=(10, 5))
+                plt.plot(eval_results['steps'], eval_results['accuracy_cosine'], marker='o', linestyle='-')
+                plt.title('Validation Accuracy during Fine-tuning')
+                plt.xlabel('Training Steps')
+                plt.ylabel('Cosine Accuracy')
+                plt.grid(True)
+                plot_save_path = os.path.join(self.output_base_path, 'validation_accuracy_plot.png')
+                plt.savefig(plot_save_path)
+                print(f"Validation plot saved to: {plot_save_path}")
+                plt.close()
+            else:
+                print(f"Columns 'steps' or 'accuracy_cosine' not found in {eval_filepath}. Cannot plot.")
+        except FileNotFoundError:
+            print(f"Evaluation results file not found at: {eval_filepath}")
+        except Exception as e:
+            print(f"An error occurred during plotting: {e}")
+
+    def _plot_comparison(self, baseline_acc: float, finetuned_acc: float):
+        """Plot comparison between baseline and fine-tuned model."""
+        print("\n--- Results Comparison ---")
+        print(f"Baseline Test Accuracy:   {baseline_acc:.4f}")
+        print(f"Fine-tuned Test Accuracy: {finetuned_acc:.4f}")
+        improvement = finetuned_acc - baseline_acc
+        print(f"Improvement:              {improvement:.4f} ({improvement/baseline_acc:.1%})")
+
+        labels = ['Baseline', 'Fine-tuned']
+        accuracies = [baseline_acc, finetuned_acc]
+
+        plt.figure(figsize=(6, 4))
+        bars = plt.bar(labels, accuracies, color=['skyblue', 'lightgreen'])
+
+        for bar in bars:
+            yval = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2.0, yval, f'{yval:.4f}', va='bottom', ha='center')
+
+        plt.ylabel('Accuracy (Cosine)')
+        plt.title('Baseline vs. Fine-tuned Model Accuracy')
+        plt.ylim(0, max(accuracies) * 1.1)
+        plot_save_path = os.path.join(self.output_base_path, 'comparison_accuracy_plot.png')
+        plt.savefig(plot_save_path)
+        print(f"Comparison plot saved to: {plot_save_path}")
+        plt.close()

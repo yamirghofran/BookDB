@@ -11,7 +11,8 @@ import pytz # Required for handling timezones robustly
 import ast # For safely evaluating string representations of lists
 import numpy as np
 from typing import Dict, Any
-from ..pipeline import PipelineStep
+from .core import PipelineStep
+from utils import send_discord_webhook
 
 # --- Logging & Faker Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,6 +41,28 @@ class PostgresUploaderStep(PipelineStep):
         super().configure(config)
         self.db_config = self.config.get("db_config", self.db_config)
         self.data_paths = self.config.get("data_paths", self.data_paths)
+
+    def _send_notification(self, title: str, description: str, color: int = 0x00FF00, fields: list = None, error: bool = False):
+        """Send a Discord notification with consistent formatting."""
+        try:
+            embed = {
+                "title": f"🗄️ {title}" if not error else f"❌ {title}",
+                "description": description,
+                "color": color if not error else 0xFF0000,  # Red for errors
+                "timestamp": datetime.now().isoformat(),
+                "footer": {"text": f"Pipeline Step: {self.name}"}
+            }
+            
+            if fields:
+                embed["fields"] = fields
+                
+            send_discord_webhook(
+                content=None,
+                embed=embed,
+                username="BookDB Pipeline"
+            )
+        except Exception as e:
+            logging.warning(f"Failed to send Discord notification: {e}")
 
     # --- Helper Functions (Static or Class Methods if they don't need instance state) ---
     @staticmethod
@@ -113,11 +136,41 @@ class PostgresUploaderStep(PipelineStep):
             psycopg2.extras.register_uuid()
             self.cursor = self.conn.cursor()
             logging.info("Successfully connected to the database.")
+            
+            # Send success notification
+            self._send_notification(
+                "Database Connection Established",
+                f"Successfully connected to PostgreSQL database",
+                fields=[
+                    {"name": "Host", "value": f"`{self.db_config.get('host', 'localhost')}`", "inline": True},
+                    {"name": "Database", "value": f"`{self.db_config.get('database', 'unknown')}`", "inline": True},
+                    {"name": "User", "value": f"`{self.db_config.get('user', 'unknown')}`", "inline": True},
+                    {"name": "Auto-commit", "value": "Disabled (transaction mode)", "inline": True},
+                    {"name": "Status", "value": "✅ Ready for data upload", "inline": False}
+                ]
+            )
         except psycopg2.OperationalError as db_err:
-            logging.error(f"Database connection failed: {db_err}")
+            error_msg = f"Database connection failed: {db_err}"
+            logging.error(error_msg)
+            self._send_notification(
+                "Database Connection Failed",
+                error_msg,
+                error=True,
+                fields=[
+                    {"name": "Host", "value": f"`{self.db_config.get('host', 'localhost')}`", "inline": True},
+                    {"name": "Database", "value": f"`{self.db_config.get('database', 'unknown')}`", "inline": True},
+                    {"name": "Error Type", "value": "Operational Error", "inline": True}
+                ]
+            )
             raise  # Re-raise the exception to be handled by the caller
         except Exception as e:
-            logging.error(f"An unexpected error occurred during DB connection: {e}")
+            error_msg = f"An unexpected error occurred during DB connection: {e}"
+            logging.error(error_msg)
+            self._send_notification(
+                "Database Connection Failed",
+                error_msg,
+                error=True
+            )
             raise
 
     def _close_db(self):
@@ -139,29 +192,73 @@ class PostgresUploaderStep(PipelineStep):
             self.users_df = pd.read_csv(self.data_paths['users'])
             self.item_id_map_df = pd.read_csv(self.data_paths['item_id_map'])
             logging.info("All data files loaded successfully.")
+            
+            # Send success notification with data statistics
+            self._send_notification(
+                "Data Loading Complete",
+                f"Successfully loaded all data files for database upload",
+                fields=[
+                    {"name": "Books", "value": f"{len(self.books_df):,} records", "inline": True},
+                    {"name": "Interactions", "value": f"{len(self.interactions_df):,} records", "inline": True},
+                    {"name": "Reviews", "value": f"{len(self.reviews_df):,} records", "inline": True},
+                    {"name": "Authors", "value": f"{len(self.authors_df):,} records", "inline": True},
+                    {"name": "Users", "value": f"{len(self.users_df):,} records", "inline": True},
+                    {"name": "Item ID Map", "value": f"{len(self.item_id_map_df):,} mappings", "inline": True},
+                    {"name": "Total Records", "value": f"{len(self.books_df) + len(self.interactions_df) + len(self.reviews_df) + len(self.authors_df) + len(self.users_df):,}", "inline": False}
+                ]
+            )
         except FileNotFoundError as e:
-            logging.error(f"Error loading data file: {e}. Check paths in data_paths config.")
+            error_msg = f"Error loading data file: {e}. Check paths in data_paths config."
+            logging.error(error_msg)
+            self._send_notification(
+                "Data Loading Failed",
+                error_msg,
+                error=True,
+                fields=[
+                    {"name": "Missing File", "value": f"`{str(e).split()[-1] if str(e) else 'Unknown'}`", "inline": True},
+                    {"name": "Config Check", "value": "Verify data_paths configuration", "inline": True}
+                ]
+            )
             raise
         except Exception as e:
-            logging.error(f"An error occurred during data loading: {e}")
+            error_msg = f"An error occurred during data loading: {e}"
+            logging.error(error_msg)
+            self._send_notification(
+                "Data Loading Failed",
+                error_msg,
+                error=True
+            )
             raise
         
         # Initialize book_ncf_id_map
         if self.item_id_map_df is not None:
-            self.book_ncf_id_map = dict(zip(self.item_id_map_df['original_itemId'], self.item_id_map_df['new_itemId']))
+            self.book_ncf_id_map = dict(zip(self.item_id_map_df['itemId'], self.item_id_map_df['ncf_itemId']))
         
         # Populate all_input_user_ids
         if self.users_df is not None:
             try:
-                self.all_input_user_ids = set(self.users_df['original_userId'].astype(str).unique())
+                self.all_input_user_ids = set(self.users_df['userId'].astype(str).unique())
                 logging.info(f"Collected {len(self.all_input_user_ids)} unique user IDs from input users_df.")
             except KeyError:
-                logging.error("Could not find 'original_userId' column in users_df. Cannot create the full user ID set.")
+                logging.error("Could not find 'userId' column in users_df. Cannot create the full user ID set.")
                 # Decide if this is a fatal error for the class
             except Exception as e:
                 logging.error(f"Error processing user IDs from users_df: {e}")
 
     def run(self) -> Dict[str, Any]:
+        # Send pipeline start notification
+        self._send_notification(
+            "PostgreSQL Upload Pipeline Started",
+            f"Beginning database upload pipeline: **{self.name}**",
+            color=0x0099FF,  # Blue for start
+            fields=[
+                {"name": "Target Database", "value": f"`{self.db_config.get('database', 'unknown')}`", "inline": True},
+                {"name": "Host", "value": f"`{self.db_config.get('host', 'localhost')}`", "inline": True},
+                {"name": "Data Sources", "value": f"{len(self.data_paths)} files configured", "inline": True},
+                {"name": "Transaction Mode", "value": "Enabled (rollback on error)", "inline": True}
+            ]
+        )
+        
         outputs = {}
         try:
             self._connect_db()
@@ -175,19 +272,91 @@ class PostgresUploaderStep(PipelineStep):
             # self.conn.commit() # Commit after all successful operations
             logging.info("Data processing and insertion pipeline completed successfully.")
             outputs["status"] = "success"
+            
+            # Send success notification
+            total_records = 0
+            if hasattr(self, 'books_df') and self.books_df is not None:
+                total_records += len(self.books_df)
+            if hasattr(self, 'interactions_df') and self.interactions_df is not None:
+                total_records += len(self.interactions_df)
+            if hasattr(self, 'reviews_df') and self.reviews_df is not None:
+                total_records += len(self.reviews_df)
+            if hasattr(self, 'authors_df') and self.authors_df is not None:
+                total_records += len(self.authors_df)
+            if hasattr(self, 'users_df') and self.users_df is not None:
+                total_records += len(self.users_df)
+                
+            self._send_notification(
+                "PostgreSQL Upload Pipeline Complete! 🎉",
+                f"Successfully completed database upload pipeline: **{self.name}**",
+                color=0x00FF00,  # Green for success
+                fields=[
+                    {"name": "Database Connection", "value": "✅ Successful", "inline": True},
+                    {"name": "Data Loading", "value": "✅ Successful", "inline": True},
+                    {"name": "Processing Status", "value": "✅ Successful", "inline": True},
+                    {"name": "Total Records Processed", "value": f"{total_records:,}", "inline": True},
+                    {"name": "Transaction Status", "value": "✅ Committed", "inline": True},
+                    {"name": "Database", "value": f"`{self.db_config.get('database', 'unknown')}`", "inline": True}
+                ]
+            )
         except psycopg2.DatabaseError as db_err:
-            logging.error(f"Database error during processing: {db_err}")
+            error_msg = f"Database error during processing: {db_err}"
+            logging.error(error_msg)
             if self.conn: self.conn.rollback()
             outputs["status"] = "db_error"
+            
+            self._send_notification(
+                "PostgreSQL Upload Failed - Database Error",
+                error_msg,
+                error=True,
+                fields=[
+                    {"name": "Error Type", "value": "Database Error", "inline": True},
+                    {"name": "Transaction", "value": "🔄 Rolled back", "inline": True},
+                    {"name": "Database", "value": f"`{self.db_config.get('database', 'unknown')}`", "inline": True}
+                ]
+            )
         except ValueError as val_err:
-             logging.error(f"Configuration or Value error: {val_err}", exc_info=True)
+             error_msg = f"Configuration or Value error: {val_err}"
+             logging.error(error_msg, exc_info=True)
              if self.conn: self.conn.rollback()
              outputs["status"] = "value_error"
+             
+             self._send_notification(
+                 "PostgreSQL Upload Failed - Configuration Error",
+                 error_msg,
+                 error=True,
+                 fields=[
+                     {"name": "Error Type", "value": "Configuration/Value Error", "inline": True},
+                     {"name": "Transaction", "value": "🔄 Rolled back", "inline": True}
+                 ]
+             )
         except Exception as e:
-            logging.error(f"An unexpected error occurred in the pipeline: {e}", exc_info=True)
+            error_msg = f"An unexpected error occurred in the pipeline: {e}"
+            logging.error(error_msg, exc_info=True)
             if self.conn: self.conn.rollback()
             outputs["status"] = "error"
+            
+            self._send_notification(
+                "PostgreSQL Upload Pipeline Failed",
+                error_msg,
+                error=True,
+                fields=[
+                    {"name": "Error Type", "value": "Unexpected Error", "inline": True},
+                    {"name": "Transaction", "value": "🔄 Rolled back", "inline": True}
+                ]
+            )
         finally:
             self._close_db()
+            
+            # Send connection closure notification
+            self._send_notification(
+                "Database Connection Closed",
+                "PostgreSQL connection properly closed",
+                color=0x808080,  # Gray for cleanup
+                fields=[
+                    {"name": "Connection Status", "value": "🔌 Disconnected", "inline": True},
+                    {"name": "Pipeline Status", "value": outputs.get("status", "unknown"), "inline": True}
+                ]
+            )
         self.output_data = outputs
         return outputs

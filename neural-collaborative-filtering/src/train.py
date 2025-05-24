@@ -4,6 +4,7 @@ from gmf import GMFEngine
 from mlp import MLPEngine
 from neumf import NeuMFEngine
 import os
+import matplotlib.pyplot as plt
 from utils import get_best_checkpoint
 
 
@@ -35,8 +36,6 @@ mlp_config = {'alias': 'mlp_factor32neg3_bz4096_166432168_pretrain_reg_0.0000001
               'batch_size': 4096,
               'optimizer': 'adam',
               'adam_lr': 1e-3,
-              #'num_users': 6040,
-              #'num_items': 3706,
               'latent_dim': 32,
               'num_negative': 4,
               'layers': [64, 64, 32, 16, 8],  # layers[0] is the concat of latent user vector & latent item vector
@@ -54,8 +53,6 @@ neumf_config = {'alias': 'neumf_factor32neg4',
                 'batch_size': 4096,
                 'optimizer': 'adam',
                 'adam_lr': 1e-3,
-                #'num_users': 6040,
-                #'num_items': 3706,
                 'latent_dim_mf': 32,
                 'latent_dim_mlp': 32,
                 'num_negative': 4,
@@ -71,10 +68,64 @@ neumf_config = {'alias': 'neumf_factor32neg4',
                 'model_dir': 'checkpoints/{}_Epoch{}_HR{:.4f}_NDCG{:.4f}.model'
                 }
 
-def run_ncf_pipeline(book_interactions, output_dir='../res'):
+def plot_metrics_comparison(output_dir='results/ncf'):
+    """Plot and save comparison charts for model metrics."""
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Map file names to model names for legend clarity
+    model_files = {
+        'gmf_metrics_history.csv': 'GMF',
+        'mlp_metrics_history.csv': 'MLP',
+        'neumf_metrics_history.csv': 'NeuMF',
+    }
+
+    plt.figure(figsize=(10, 6))
+
+    # Plot hit_ratio
+    for csv_file, model_name in model_files.items():
+        path = os.path.join(output_dir, csv_file)
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            df = df.head(20)
+            df['epoch'] = range(1, len(df) + 1)
+            plt.plot(df['epoch'], df['hit_ratio'], marker='o', label=f'{model_name} Hit Ratio')
+
+    plt.xlabel('Epoch')
+    plt.ylabel('Hit Ratio')
+    plt.title('Model Comparison: Hit Ratio over Epochs')
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(range(1, 21))  # Show only whole numbers 1 to 20
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'hit_ratio_comparison.png'))
+    
+    plt.figure(figsize=(10, 6))
+    # Plot ndcg
+    for csv_file, model_name in model_files.items():
+        path = os.path.join(output_dir, csv_file)
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            df = df.head(20)
+            df['epoch'] = range(1, len(df) + 1)
+            plt.plot(df['epoch'], df['ndcg'], marker='o', label=f'{model_name} NDCG')
+
+    plt.xlabel('Epoch')
+    plt.ylabel('NDCG')
+    plt.title('Model Comparison: NDCG over Epochs')
+    plt.legend()
+    plt.grid(True)
+    plt.xticks(range(1, 21))  # Show only whole numbers 1 to 20
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'ndcg_comparison.png'))
+
+def run_ncf_pipeline(book_interactions, output_dir='results/ncf'):
     """Run the full NCF pipeline (GMF, MLP, NeuMF) and save metrics to output_dir."""
     from data import SampleGenerator
     import pandas as pd
+    
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
 
     sample_generator = SampleGenerator(ratings=book_interactions)
     evaluate_data = sample_generator.evaluate_data
@@ -123,6 +174,9 @@ def run_ncf_pipeline(book_interactions, output_dir='../res'):
         engine.save(config['alias'], epoch, hit_ratio, ndcg)
         neumf_metrics_history.append({'epoch': epoch, 'hit_ratio': hit_ratio, 'ndcg': ndcg})
     pd.DataFrame(neumf_metrics_history).to_csv(f'{output_dir}/neumf_metrics_history.csv', index=False)
+    
+    # Generate comparison plots
+    plot_metrics_comparison(output_dir)
 
 book_interactions_dir = 'data/interactions_prepared_ncf_reduced.parquet'
 book_interactions = pd.read_parquet(book_interactions_dir)

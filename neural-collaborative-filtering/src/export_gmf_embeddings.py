@@ -12,6 +12,10 @@ import os
 import glob
 import re
 
+# Create output directory if it doesn't exist
+output_dir = 'embeddings'
+os.makedirs(output_dir, exist_ok=True)
+
 # Copy your GMF config here
 gmf_config = {
     'alias': 'gmf_factor32neg4-implict',
@@ -88,10 +92,10 @@ item_ids = np.arange(item_embeddings.shape[0])
 
 user_df = pd.DataFrame(user_embeddings)
 user_df.insert(0, 'user_id', user_ids)
-user_df.to_parquet('user_embeddings.parquet', index=False)
+user_df.to_parquet(os.path.join(output_dir, 'gmf_user_embeddings.parquet'), index=False)
 
 item_df = pd.DataFrame(item_embeddings)
 item_df.insert(0, 'item_id', item_ids)
-item_df.to_parquet('item_embeddings.parquet', index=False)
+item_df.to_parquet(os.path.join(output_dir, 'gmf_book_embeddings.parquet'), index=False)
 
-print('User and item embeddings exported to user_embeddings.parquet and item_embeddings.parquet')
+print(f'User and item embeddings exported to {output_dir}/gmf_user_embeddings.parquet and {output_dir}/gmf_book_embeddings.parquet')

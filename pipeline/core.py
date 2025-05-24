@@ -1,7 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Type, Optional
-import yaml
 import os
 
 class PipelineStep(ABC):
@@ -30,14 +29,19 @@ class PipelineStep(ABC):
         """
         pass
     
-    def configure(self, config: Dict[str, Any]) -> None:
+    def configure(self, config: Any) -> None:
         """
-        Configure this step with values from config file.
+        Configure this step with values from config object.
         
         Args:
-            config: Configuration dictionary for this step
+            config: Configuration object for this step (can be dataclass or dict)
         """
-        self.config = config
+        if hasattr(config, '__dict__'):
+            # Convert dataclass to dict
+            self.config = config.__dict__
+        else:
+            # Assume it's already a dict
+            self.config = config
         self._validate_config()
         
     def _validate_config(self) -> None:
@@ -57,30 +61,49 @@ class PipelineStep(ABC):
 
 
 class Pipeline:
-    """Orchestrates a sequence of pipeline steps with automatic config loading."""
+    """Orchestrates a sequence of pipeline steps with Python configuration."""
     
-    def __init__(self, config_path: str):
+    def __init__(self, config):
         """
-        Initialize pipeline with path to config file.
+        Initialize pipeline with configuration object.
         
         Args:
-            config_path: Path to YAML config file
+            config: PipelineConfig object or path to Python config module
         """
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.config_path = config_path
-        self.config = self._load_config()
-        self.steps = []
         
-    def _load_config(self) -> Dict[str, Any]:
-        """Load configuration from YAML file."""
+        if isinstance(config, str):
+            # If config is a string, treat it as a module path and import
+            self.config = self._load_config_from_module(config)
+        else:
+            # Assume it's already a config object
+            self.config = config
+            
+        self.steps = []
+        self._setup_logging()
+        
+    def _load_config_from_module(self, module_path: str):
+        """Load configuration from a Python module."""
         try:
-            with open(self.config_path, 'r') as f:
-                config = yaml.safe_load(f)
-                self.logger.info(f"Loaded configuration from {self.config_path}")
+            import importlib
+            module = importlib.import_module(module_path)
+            if hasattr(module, 'PipelineConfig'):
+                config = module.PipelineConfig()
+                self.logger.info(f"Loaded configuration from {module_path}")
                 return config
+            else:
+                raise AttributeError(f"Module {module_path} does not have PipelineConfig class")
         except Exception as e:
-            self.logger.error(f"Failed to load config from {self.config_path}: {str(e)}")
+            self.logger.error(f"Failed to load config from {module_path}: {str(e)}")
             raise
+    
+    def _setup_logging(self):
+        """Setup logging based on configuration."""
+        log_level = getattr(self.config.global_config, 'log_level', 'INFO')
+        logging.basicConfig(
+            level=getattr(logging, log_level),
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
             
     def add_step(self, step_class: Type[PipelineStep], step_name: str) -> None:
         """
@@ -88,13 +111,16 @@ class Pipeline:
         
         Args:
             step_class: PipelineStep class to instantiate
-            step_name: Name of the step (must match a section in config)
+            step_name: Name of the step (must match a config attribute)
         """
-        if step_name not in self.config:
+        if not hasattr(self.config, step_name):
             self.logger.warning(f"No configuration found for step '{step_name}'")
+            step_config = {}
+        else:
+            step_config = getattr(self.config, step_name)
             
         step = step_class(step_name)
-        step.configure(self.config.get(step_name, {}))
+        step.configure(step_config)
         self.steps.append(step)
         self.logger.info(f"Added step: {step_name}")
         
@@ -117,9 +143,9 @@ class Pipeline:
             # Set input from previous step
             step.set_input(current_input)
             
-            # Process the step
+            # Execute the step
             try:
-                step_output = step.process()
+                step_output = step.run()
                 current_input = step_output
                 final_output = step_output
                 self.logger.info(f"Step completed: {step.name}")
