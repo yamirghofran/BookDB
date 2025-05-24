@@ -11,8 +11,10 @@ import dask.dataframe as dd
 import boto3
 from botocore.config import Config
 from typing import Dict, Any
+import datetime
 
 from .core import PipelineStep
+from utils import send_discord_webhook
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
@@ -81,119 +83,332 @@ class DataPreprocessorStep(PipelineStep):
     def _get_path(self, folder, file_name):
         return os.path.join(folder, file_name)
 
+    def _send_notification(self, title: str, description: str, color: int = 0x00FF00, fields: list = None, error: bool = False):
+        """Send a Discord notification with consistent formatting."""
+        try:
+            embed = {
+                "title": f"📊 {title}" if not error else f"❌ {title}",
+                "description": description,
+                "color": color if not error else 0xFF0000,  # Red for errors
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "footer": {"text": f"Pipeline Step: {self.name}"}
+            }
+            
+            if fields:
+                embed["fields"] = fields
+                
+            send_discord_webhook(
+                content=None,
+                embed=embed,
+                username="BookDB Pipeline"
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to send Discord notification: {e}")
+
     def process_books(self) -> str:
         json_path = self._get_path(self.base_data_path, self.books_input_json)
         parquet_path = self._get_path(self.base_output_path, self.books_output_parquet)
 
-        self.logger.info(f"Processing books from {json_path}...")
-        books_df = pd.read_json(json_path, lines=True)
-        books_df.to_parquet(parquet_path)
-        self.logger.info(f"Books data saved to {parquet_path}")
-        return parquet_path
+        try:
+            self.logger.info(f"Processing books from {json_path}...")
+            books_df = pd.read_json(json_path, lines=True)
+            books_df.to_parquet(parquet_path)
+            self.logger.info(f"Books data saved to {parquet_path}")
+            
+            # Send success notification
+            self._send_notification(
+                "Books Processing Complete",
+                f"Successfully processed **{len(books_df):,}** books",
+                fields=[
+                    {"name": "Input File", "value": f"`{self.books_input_json}`", "inline": True},
+                    {"name": "Output File", "value": f"`{self.books_output_parquet}`", "inline": True},
+                    {"name": "Records", "value": f"{len(books_df):,}", "inline": True}
+                ]
+            )
+            
+            return parquet_path
+        except Exception as e:
+            error_msg = f"Failed to process books: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Books Processing Failed",
+                error_msg,
+                error=True
+            )
+            raise
 
     def process_interactions_csv(self) -> str:
         csv_path = self._get_path(self.base_data_path, self.interactions_csv_input)
         # book_id_map_path and user_id_map_path are now direct paths from config
         parquet_path = self._get_path(self.base_output_path, self.interactions_csv_output_parquet)
 
-        self.logger.info(f"Processing interactions CSV from {csv_path}...")
-        interactions_df = pd.read_csv(csv_path)
+        try:
+            self.logger.info(f"Processing interactions CSV from {csv_path}...")
+            interactions_df = pd.read_csv(csv_path)
 
-        # Use configured paths directly for map files
-        self.logger.info(f"Loading book ID map from {self.book_id_map_path}")
-        book_id_map_df = pd.read_csv(self.book_id_map_path)
-        self.logger.info(f"Loading user ID map from {self.user_id_map_path}")
-        user_id_map_df = pd.read_csv(self.user_id_map_path)
+            # Use configured paths directly for map files
+            self.logger.info(f"Loading book ID map from {self.book_id_map_path}")
+            book_id_map_df = pd.read_csv(self.book_id_map_path)
+            self.logger.info(f"Loading user ID map from {self.user_id_map_path}")
+            user_id_map_df = pd.read_csv(self.user_id_map_path)
 
-        interactions_df['user_id'] = interactions_df['user_id'].map(user_id_map_df.set_index('user_id_csv')['user_id'])
-        interactions_df['book_id'] = interactions_df['book_id'].map(book_id_map_df.set_index('book_id_csv')['book_id'])
-        
-        interactions_df.to_parquet(parquet_path)
-        self.logger.info(f"Interactions CSV data saved to {parquet_path}")
-        return parquet_path
+            interactions_df['user_id'] = interactions_df['user_id'].map(user_id_map_df.set_index('user_id_csv')['user_id'])
+            interactions_df['book_id'] = interactions_df['book_id'].map(book_id_map_df.set_index('book_id_csv')['book_id'])
+            
+            interactions_df.to_parquet(parquet_path)
+            self.logger.info(f"Interactions CSV data saved to {parquet_path}")
+            
+            # Send success notification
+            self._send_notification(
+                "Interactions CSV Processing Complete",
+                f"Successfully processed **{len(interactions_df):,}** interactions with ID mapping",
+                fields=[
+                    {"name": "Input File", "value": f"`{self.interactions_csv_input}`", "inline": True},
+                    {"name": "Output File", "value": f"`{self.interactions_csv_output_parquet}`", "inline": True},
+                    {"name": "Records", "value": f"{len(interactions_df):,}", "inline": True}
+                ]
+            )
+            
+            return parquet_path
+        except Exception as e:
+            error_msg = f"Failed to process interactions CSV: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Interactions CSV Processing Failed",
+                error_msg,
+                error=True
+            )
+            raise
 
     def process_interactions_dedup_json(self) -> str:
         json_path = self._get_path(self.base_data_path, self.interactions_dedup_input_json)
         parquet_output_path = self._get_path(self.base_output_path, self.interactions_dedup_output_parquet)
         progress_tracker_path = self._get_path(self.base_output_path, self.interactions_dedup_progress_file)
 
-        self.logger.info(f"Processing interactions dedup JSON from {json_path}...")
-        start_chunk = 0
-        if os.path.exists(progress_tracker_path):
-            with open(progress_tracker_path) as f:
-                content = f.read().strip()
-                if content:
-                    start_chunk = int(content)
-        
-        writer = None
         try:
-            for chunk_count, chunk in enumerate(pd.read_json(json_path, lines=True, chunksize=self.interactions_dedup_chunk_size)):
-                if chunk_count < start_chunk:
-                    self.logger.info(f"Skipping chunk {chunk_count+1}/{start_chunk}...")
-                    continue
+            self.logger.info(f"Processing interactions dedup JSON from {json_path}...")
+            start_chunk = 0
+            if os.path.exists(progress_tracker_path):
+                with open(progress_tracker_path) as f:
+                    content = f.read().strip()
+                    if content:
+                        start_chunk = int(content)
+            
+            if start_chunk > 0:
+                self._send_notification(
+                    "Resuming Interactions Dedup Processing",
+                    f"Resuming from chunk **{start_chunk + 1}**",
+                    color=0xFFA500  # Orange for resume
+                )
+            
+            writer = None
+            total_records = 0
+            try:
+                for chunk_count, chunk in enumerate(pd.read_json(json_path, lines=True, chunksize=self.interactions_dedup_chunk_size)):
+                    if chunk_count < start_chunk:
+                        self.logger.info(f"Skipping chunk {chunk_count+1}/{start_chunk}...")
+                        continue
+                    
+                    self.logger.info(f"Processing chunk {chunk_count + 1}...")
+                    table = pa.Table.from_pandas(chunk)
+                    total_records += len(chunk)
+                    
+                    if writer is None:
+                        writer = pq.ParquetWriter(parquet_output_path, table.schema)
+                    
+                    writer.write_table(table)
+                    
+                    with open(progress_tracker_path, 'w') as f:
+                        f.write(str(chunk_count + 1))
+                    
+                    # Send progress update every 10 chunks
+                    if (chunk_count + 1) % 10 == 0:
+                        self._send_notification(
+                            "Interactions Dedup Progress",
+                            f"Processed **{chunk_count + 1}** chunks ({total_records:,} records so far)",
+                            color=0x0099FF  # Blue for progress
+                        )
                 
-                self.logger.info(f"Processing chunk {chunk_count + 1}...")
-                table = pa.Table.from_pandas(chunk)
+                self.logger.info(f"Interactions dedup JSON data saved to {parquet_output_path}")
                 
-                if writer is None:
-                    writer = pq.ParquetWriter(parquet_output_path, table.schema)
+                # Send completion notification
+                self._send_notification(
+                    "Interactions Dedup Processing Complete",
+                    f"Successfully processed **{total_records:,}** deduplicated interactions",
+                    fields=[
+                        {"name": "Input File", "value": f"`{self.interactions_dedup_input_json}`", "inline": True},
+                        {"name": "Output File", "value": f"`{self.interactions_dedup_output_parquet}`", "inline": True},
+                        {"name": "Total Records", "value": f"{total_records:,}", "inline": True},
+                        {"name": "Chunk Size", "value": f"{self.interactions_dedup_chunk_size:,}", "inline": True}
+                    ]
+                )
                 
-                writer.write_table(table)
-                
-                with open(progress_tracker_path, 'w') as f:
-                    f.write(str(chunk_count + 1))
-            self.logger.info(f"Interactions dedup JSON data saved to {parquet_output_path}")
-        finally:
-            if writer:
-                writer.close()
-                self.logger.info("Parquet writer closed for interactions_dedup.")
-        
-        return parquet_output_path
+            finally:
+                if writer:
+                    writer.close()
+                    self.logger.info("Parquet writer closed for interactions_dedup.")
+            
+            return parquet_output_path
+        except Exception as e:
+            error_msg = f"Failed to process interactions dedup JSON: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Interactions Dedup Processing Failed",
+                error_msg,
+                error=True
+            )
+            raise
 
     def process_reviews(self) -> str:
         json_path = self._get_path(self.base_data_path, self.reviews_input_json)
         parquet_path = self._get_path(self.base_output_path, self.reviews_output_parquet)
 
-        self.logger.info(f"Processing reviews from {json_path}...")
-        reviews_df = pd.read_json(json_path, lines=True)
-        reviews_df.to_parquet(parquet_path)
-        self.logger.info(f"Reviews data saved to {parquet_path}")
-        return parquet_path
+        try:
+            self.logger.info(f"Processing reviews from {json_path}...")
+            reviews_df = pd.read_json(json_path, lines=True)
+            reviews_df.to_parquet(parquet_path)
+            self.logger.info(f"Reviews data saved to {parquet_path}")
+            
+            # Send success notification
+            self._send_notification(
+                "Reviews Processing Complete",
+                f"Successfully processed **{len(reviews_df):,}** reviews",
+                fields=[
+                    {"name": "Input File", "value": f"`{self.reviews_input_json}`", "inline": True},
+                    {"name": "Output File", "value": f"`{self.reviews_output_parquet}`", "inline": True},
+                    {"name": "Records", "value": f"{len(reviews_df):,}", "inline": True}
+                ]
+            )
+            
+            return parquet_path
+        except Exception as e:
+            error_msg = f"Failed to process reviews: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Reviews Processing Failed",
+                error_msg,
+                error=True
+            )
+            raise
 
     def process_book_works(self) -> str:
         json_path = self._get_path(self.base_data_path, self.book_works_input_json)
         parquet_path = self._get_path(self.base_output_path, self.book_works_output_parquet)
 
-        self.logger.info(f"Processing book works from {json_path}...")
-        books_works_df = pd.read_json(json_path, lines=True)
-        books_works_df.to_parquet(parquet_path)
-        self.logger.info(f"Book works data saved to {parquet_path}")
-        return parquet_path
+        try:
+            self.logger.info(f"Processing book works from {json_path}...")
+            books_works_df = pd.read_json(json_path, lines=True)
+            books_works_df.to_parquet(parquet_path)
+            self.logger.info(f"Book works data saved to {parquet_path}")
+            
+            # Send success notification
+            self._send_notification(
+                "Book Works Processing Complete",
+                f"Successfully processed **{len(books_works_df):,}** book works",
+                fields=[
+                    {"name": "Input File", "value": f"`{self.book_works_input_json}`", "inline": True},
+                    {"name": "Output File", "value": f"`{self.book_works_output_parquet}`", "inline": True},
+                    {"name": "Records", "value": f"{len(books_works_df):,}", "inline": True}
+                ]
+            )
+            
+            return parquet_path
+        except Exception as e:
+            error_msg = f"Failed to process book works: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Book Works Processing Failed",
+                error_msg,
+                error=True
+            )
+            raise
 
     def process_authors(self) -> str:
         json_path = self._get_path(self.base_data_path, self.authors_input_json)
         parquet_path = self._get_path(self.base_output_path, self.authors_output_parquet)
 
-        self.logger.info(f"Processing authors from {json_path}...")
-        authors_df = pd.read_json(json_path, lines=True)
-        authors_df.to_parquet(parquet_path)
-        self.logger.info(f"Authors data saved to {parquet_path}")
-        return parquet_path
+        try:
+            self.logger.info(f"Processing authors from {json_path}...")
+            authors_df = pd.read_json(json_path, lines=True)
+            authors_df.to_parquet(parquet_path)
+            self.logger.info(f"Authors data saved to {parquet_path}")
+            
+            # Send success notification
+            self._send_notification(
+                "Authors Processing Complete",
+                f"Successfully processed **{len(authors_df):,}** authors",
+                fields=[
+                    {"name": "Input File", "value": f"`{self.authors_input_json}`", "inline": True},
+                    {"name": "Output File", "value": f"`{self.authors_output_parquet}`", "inline": True},
+                    {"name": "Records", "value": f"{len(authors_df):,}", "inline": True}
+                ]
+            )
+            
+            return parquet_path
+        except Exception as e:
+            error_msg = f"Failed to process authors: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Authors Processing Failed",
+                error_msg,
+                error=True
+            )
+            raise
 
     def process(self) -> Dict[str, Any]:
         self.logger.info(f"Starting data preprocessing step: {self.name}")
-        outputs = {}
         
-        outputs["books_parquet_path"] = self.process_books()
-        outputs["interactions_csv_parquet_path"] = self.process_interactions_csv()
-        outputs["interactions_dedup_parquet_path"] = self.process_interactions_dedup_json()
-        outputs["reviews_parquet_path"] = self.process_reviews()
-        outputs["book_works_parquet_path"] = self.process_book_works()
-        outputs["authors_parquet_path"] = self.process_authors()
+        # Send pipeline start notification
+        self._send_notification(
+            "Data Preprocessing Started",
+            f"Beginning data preprocessing pipeline: **{self.name}**",
+            color=0x0099FF,  # Blue for start
+            fields=[
+                {"name": "Input Directory", "value": f"`{self.base_data_path}`", "inline": True},
+                {"name": "Output Directory", "value": f"`{self.base_output_path}`", "inline": True}
+            ]
+        )
         
-        self.logger.info(f"Data preprocessing step {self.name} finished successfully.")
-        self.output_data = outputs
-        return outputs
+        try:
+            outputs = {}
+            
+            outputs["books_parquet_path"] = self.process_books()
+            outputs["interactions_csv_parquet_path"] = self.process_interactions_csv()
+            outputs["interactions_dedup_parquet_path"] = self.process_interactions_dedup_json()
+            outputs["reviews_parquet_path"] = self.process_reviews()
+            outputs["book_works_parquet_path"] = self.process_book_works()
+            outputs["authors_parquet_path"] = self.process_authors()
+            
+            self.logger.info(f"Data preprocessing step {self.name} finished successfully.")
+            
+            # Send pipeline completion notification
+            self._send_notification(
+                "Data Preprocessing Complete! 🎉",
+                f"All data processing tasks completed successfully for pipeline: **{self.name}**",
+                color=0x00FF00,  # Green for success
+                fields=[
+                    {"name": "Books", "value": "✅ Complete", "inline": True},
+                    {"name": "Interactions CSV", "value": "✅ Complete", "inline": True},
+                    {"name": "Interactions Dedup", "value": "✅ Complete", "inline": True},
+                    {"name": "Reviews", "value": "✅ Complete", "inline": True},
+                    {"name": "Book Works", "value": "✅ Complete", "inline": True},
+                    {"name": "Authors", "value": "✅ Complete", "inline": True},
+                    {"name": "Output Directory", "value": f"`{self.base_output_path}`", "inline": False}
+                ]
+            )
+            
+            self.output_data = outputs
+            return outputs
+            
+        except Exception as e:
+            error_msg = f"Data preprocessing pipeline failed: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Data Preprocessing Pipeline Failed",
+                error_msg,
+                error=True
+            )
+            raise
 
     def run(self) -> Dict[str, Any]:
         """Satisfies PipelineStep ABC and delegates to process."""

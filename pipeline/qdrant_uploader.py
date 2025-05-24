@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any
 from .core import PipelineStep
 import logging
+import datetime
+from utils import send_discord_webhook
 
 class QdrantManager:
     def __init__(self, url="http://localhost:6333"):
@@ -221,35 +223,187 @@ class QdrantUploaderStep(PipelineStep):
         self.sbert_distance = self.config.get("sbert_distance", self.sbert_distance)
         self.gmf_distance = self.config.get("gmf_distance", self.gmf_distance)
 
+    def _send_notification(self, title: str, description: str, color: int = 0x00FF00, fields: list = None, error: bool = False):
+        """Send a Discord notification with consistent formatting."""
+        try:
+            embed = {
+                "title": f"🔍 {title}" if not error else f"❌ {title}",
+                "description": description,
+                "color": color if not error else 0xFF0000,  # Red for errors
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "footer": {"text": f"Pipeline Step: {self.name}"}
+            }
+            
+            if fields:
+                embed["fields"] = fields
+                
+            send_discord_webhook(
+                content=None,
+                embed=embed,
+                username="BookDB Pipeline"
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to send Discord notification: {e}")
+
     def run(self) -> Dict[str, Any]:
         self.logger.info("Starting Qdrant upload step...")
+        
+        # Send pipeline start notification
+        self._send_notification(
+            "Qdrant Upload Pipeline Started",
+            f"Beginning vector database upload pipeline: **{self.name}**",
+            color=0x0099FF,  # Blue for start
+            fields=[
+                {"name": "Qdrant URL", "value": f"`{self.qdrant_url}`", "inline": True},
+                {"name": "GMF Collections", "value": f"`{self.gmf_user_collection}`, `{self.gmf_book_collection}`", "inline": True},
+                {"name": "SBERT Collection", "value": f"`{self.sbert_collection}`", "inline": True},
+                {"name": "GMF Vector Size", "value": f"{self.gmf_vector_size}D", "inline": True},
+                {"name": "SBERT Vector Size", "value": f"{self.sbert_vector_size}D", "inline": True},
+                {"name": "Total Collections", "value": "3 collections", "inline": True}
+            ]
+        )
+        
         outputs = {}
-        qdrant_manager = QdrantManager(url=self.qdrant_url)
-        # GMF User Embeddings
-        gmf_user_processor = GMFUserEmbeddingProcessor(self.gmf_user_embeddings_path, self.user_id_map_path, num_embedding_cols=self.gmf_vector_size)
-        gmf_user_processor.process_embeddings()
-        gmf_user_points = gmf_user_processor.generate_qdrant_points()
-        qdrant_manager.create_collection_if_not_exists(self.gmf_user_collection, vector_size=self.gmf_vector_size, distance_metric=self.gmf_distance)
-        qdrant_manager.batch_upload_points(self.gmf_user_collection, gmf_user_points)
-        outputs["gmf_user_collection"] = self.gmf_user_collection
-        outputs["gmf_user_count"] = len(gmf_user_points)
-        # GMF Book Embeddings
-        gmf_book_processor = GMFBookEmbeddingProcessor(self.gmf_book_embeddings_path, self.item_id_map_path, num_embedding_cols=self.gmf_vector_size)
-        gmf_book_processor.process_embeddings()
-        gmf_book_points = gmf_book_processor.generate_qdrant_points()
-        qdrant_manager.create_collection_if_not_exists(self.gmf_book_collection, vector_size=self.gmf_vector_size, distance_metric=self.gmf_distance)
-        qdrant_manager.batch_upload_points(self.gmf_book_collection, gmf_book_points)
-        outputs["gmf_book_collection"] = self.gmf_book_collection
-        outputs["gmf_book_count"] = len(gmf_book_points)
-        # SBERT Book Embeddings
-        sbert_processor = SBERTEmbeddingProcessor(self.sbert_embeddings_path)
-        sbert_processor.process_embeddings()
-        sbert_points = sbert_processor.generate_qdrant_points()
-        qdrant_manager.create_collection_if_not_exists(self.sbert_collection, vector_size=self.sbert_vector_size, distance_metric=self.sbert_distance)
-        qdrant_manager.batch_upload_points(self.sbert_collection, sbert_points)
-        outputs["sbert_collection"] = self.sbert_collection
-        outputs["sbert_count"] = len(sbert_points)
-        self.logger.info("Qdrant upload step finished.")
+        
+        try:
+            qdrant_manager = QdrantManager(url=self.qdrant_url)
+            
+            # Send Qdrant connection notification
+            self._send_notification(
+                "Qdrant Connection Established",
+                f"Successfully connected to Qdrant vector database",
+                fields=[
+                    {"name": "Qdrant URL", "value": f"`{self.qdrant_url}`", "inline": True},
+                    {"name": "Status", "value": "✅ Connected", "inline": True}
+                ]
+            )
+            
+            # GMF User Embeddings
+            self._send_notification(
+                "Processing GMF User Embeddings",
+                f"Starting GMF user embedding processing and upload",
+                color=0xFFA500,  # Orange for progress
+                fields=[
+                    {"name": "Embedding File", "value": f"`{os.path.basename(self.gmf_user_embeddings_path)}`", "inline": True},
+                    {"name": "Collection", "value": f"`{self.gmf_user_collection}`", "inline": True},
+                    {"name": "Vector Size", "value": f"{self.gmf_vector_size}D", "inline": True}
+                ]
+            )
+            
+            gmf_user_processor = GMFUserEmbeddingProcessor(self.gmf_user_embeddings_path, self.user_id_map_path, num_embedding_cols=self.gmf_vector_size)
+            gmf_user_processor.process_embeddings()
+            gmf_user_points = gmf_user_processor.generate_qdrant_points()
+            qdrant_manager.create_collection_if_not_exists(self.gmf_user_collection, vector_size=self.gmf_vector_size, distance_metric=self.gmf_distance)
+            qdrant_manager.batch_upload_points(self.gmf_user_collection, gmf_user_points)
+            outputs["gmf_user_collection"] = self.gmf_user_collection
+            outputs["gmf_user_count"] = len(gmf_user_points)
+            
+            self._send_notification(
+                "GMF User Embeddings Upload Complete",
+                f"Successfully uploaded GMF user embeddings",
+                fields=[
+                    {"name": "Collection", "value": f"`{self.gmf_user_collection}`", "inline": True},
+                    {"name": "Vectors Uploaded", "value": f"{len(gmf_user_points):,}", "inline": True},
+                    {"name": "Distance Metric", "value": f"{self.gmf_distance}", "inline": True}
+                ]
+            )
+            
+            # GMF Book Embeddings
+            self._send_notification(
+                "Processing GMF Book Embeddings",
+                f"Starting GMF book embedding processing and upload",
+                color=0xFFA500,  # Orange for progress
+                fields=[
+                    {"name": "Embedding File", "value": f"`{os.path.basename(self.gmf_book_embeddings_path)}`", "inline": True},
+                    {"name": "Collection", "value": f"`{self.gmf_book_collection}`", "inline": True},
+                    {"name": "Vector Size", "value": f"{self.gmf_vector_size}D", "inline": True}
+                ]
+            )
+            
+            gmf_book_processor = GMFBookEmbeddingProcessor(self.gmf_book_embeddings_path, self.item_id_map_path, num_embedding_cols=self.gmf_vector_size)
+            gmf_book_processor.process_embeddings()
+            gmf_book_points = gmf_book_processor.generate_qdrant_points()
+            qdrant_manager.create_collection_if_not_exists(self.gmf_book_collection, vector_size=self.gmf_vector_size, distance_metric=self.gmf_distance)
+            qdrant_manager.batch_upload_points(self.gmf_book_collection, gmf_book_points)
+            outputs["gmf_book_collection"] = self.gmf_book_collection
+            outputs["gmf_book_count"] = len(gmf_book_points)
+            
+            self._send_notification(
+                "GMF Book Embeddings Upload Complete",
+                f"Successfully uploaded GMF book embeddings",
+                fields=[
+                    {"name": "Collection", "value": f"`{self.gmf_book_collection}`", "inline": True},
+                    {"name": "Vectors Uploaded", "value": f"{len(gmf_book_points):,}", "inline": True},
+                    {"name": "Distance Metric", "value": f"{self.gmf_distance}", "inline": True}
+                ]
+            )
+            
+            # SBERT Book Embeddings
+            self._send_notification(
+                "Processing SBERT Embeddings",
+                f"Starting SBERT embedding processing and upload",
+                color=0xFFA500,  # Orange for progress
+                fields=[
+                    {"name": "Embedding File", "value": f"`{os.path.basename(self.sbert_embeddings_path)}`", "inline": True},
+                    {"name": "Collection", "value": f"`{self.sbert_collection}`", "inline": True},
+                    {"name": "Vector Size", "value": f"{self.sbert_vector_size}D", "inline": True}
+                ]
+            )
+            
+            sbert_processor = SBERTEmbeddingProcessor(self.sbert_embeddings_path)
+            sbert_processor.process_embeddings()
+            sbert_points = sbert_processor.generate_qdrant_points()
+            qdrant_manager.create_collection_if_not_exists(self.sbert_collection, vector_size=self.sbert_vector_size, distance_metric=self.sbert_distance)
+            qdrant_manager.batch_upload_points(self.sbert_collection, sbert_points)
+            outputs["sbert_collection"] = self.sbert_collection
+            outputs["sbert_count"] = len(sbert_points)
+            
+            self._send_notification(
+                "SBERT Embeddings Upload Complete",
+                f"Successfully uploaded SBERT embeddings",
+                fields=[
+                    {"name": "Collection", "value": f"`{self.sbert_collection}`", "inline": True},
+                    {"name": "Vectors Uploaded", "value": f"{len(sbert_points):,}", "inline": True},
+                    {"name": "Distance Metric", "value": f"{self.sbert_distance}", "inline": True}
+                ]
+            )
+            
+            # Calculate totals
+            total_vectors = len(gmf_user_points) + len(gmf_book_points) + len(sbert_points)
+            
+            self.logger.info("Qdrant upload step finished.")
+            
+            # Send final success notification
+            self._send_notification(
+                "Qdrant Upload Pipeline Complete! 🎉",
+                f"Successfully uploaded all embeddings to Qdrant vector database: **{self.name}**",
+                color=0x00FF00,  # Green for success
+                fields=[
+                    {"name": "GMF User Vectors", "value": f"{outputs['gmf_user_count']:,}", "inline": True},
+                    {"name": "GMF Book Vectors", "value": f"{outputs['gmf_book_count']:,}", "inline": True},
+                    {"name": "SBERT Vectors", "value": f"{outputs['sbert_count']:,}", "inline": True},
+                    {"name": "Total Vectors", "value": f"{total_vectors:,}", "inline": True},
+                    {"name": "Collections Created", "value": f"3", "inline": True},
+                    {"name": "Qdrant URL", "value": f"`{self.qdrant_url}`", "inline": True},
+                    {"name": "Status", "value": "🔍 Ready for similarity search", "inline": False}
+                ]
+            )
+            
+        except Exception as e:
+            error_msg = f"Qdrant upload pipeline failed: {str(e)}"
+            self.logger.error(error_msg)
+            self._send_notification(
+                "Qdrant Upload Pipeline Failed",
+                error_msg,
+                error=True,
+                fields=[
+                    {"name": "Qdrant URL", "value": f"`{self.qdrant_url}`", "inline": True},
+                    {"name": "Error Type", "value": type(e).__name__, "inline": True}
+                ]
+            )
+            outputs["error"] = str(e)
+            raise
+        
         self.output_data = outputs
         return outputs
 
