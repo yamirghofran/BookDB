@@ -19,12 +19,12 @@ class GlobalConfig:
 class DataPreprocessorConfig:
     """Configuration for data preprocessing step."""
     # Input files
-    books_input_json: str = "goodreads_books.json"
+    books_input_json: str = "goodreads_books.json.gz"
     interactions_csv_input: str = "goodreads_interactions.csv"
-    interactions_dedup_input_json: str = "goodreads_interactions_dedup.json"
-    reviews_input_json: str = "goodreads_reviews.json"
-    book_works_input_json: str = "goodreads_book_works.json"
-    authors_input_json: str = "authors.json"
+    interactions_dedup_input_json: str = "goodreads_interactions_dedup.json.gz"
+    reviews_input_json: str = "goodreads_reviews_dedup.json.gz"
+    book_works_input_json: str = "goodreads_book_works.json.gz"
+    authors_input_json: str = "goodreads_book_authors.json.gz"
     
     # Output files
     books_output_parquet: str = "books.parquet"
