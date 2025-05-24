@@ -13,7 +13,7 @@ class NCFDataPreprocessorStep(PipelineStep):
         self.interactions_path = "data/reduced_interactions.parquet"
         self.user_map_path = "data/user_id_map.csv"
         self.book_map_path = "data/book_id_map.csv"
-        self.output_dir = "data/ncf/"
+        self.output_dir = "data/"
         self.interactions_prepared_df = None
         self.user_map = None
         self.item_map = None
