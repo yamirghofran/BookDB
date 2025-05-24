@@ -12,6 +12,8 @@ import boto3
 from botocore.config import Config
 from typing import Dict, Any
 import datetime
+import gc
+import psutil
 
 from .core import PipelineStep
 from utils import send_discord_webhook, download_initial_datasets
@@ -47,6 +49,8 @@ class DataPreprocessorStep(PipelineStep):
         
         self.authors_input_json: str = "authors.json"
         self.authors_output_parquet: str = "authors.parquet"
+        
+        self.chunk_size = 50000  # Default chunk size for processing
 
     def configure(self, config: Dict[str, Any]) -> None:
         super().configure(config) # Call base class configure if it does anything
@@ -82,6 +86,8 @@ class DataPreprocessorStep(PipelineStep):
         
         self.authors_input_json = self.config.get("authors_input_json", self.authors_input_json)
         self.authors_output_parquet = self.config.get("authors_output_parquet", self.authors_output_parquet)
+        
+        self.chunk_size = self.config.get("chunk_size", 50000)
 
     def _check_and_download_datasets(self):
         """Check for required datasets and download missing ones."""
@@ -183,18 +189,43 @@ class DataPreprocessorStep(PipelineStep):
 
         try:
             self.logger.info(f"Processing books from {json_path}...")
-            books_df = pd.read_json(json_path, lines=True)
-            books_df.to_parquet(parquet_path)
+            self._log_memory_usage("before books processing")
+            
+            # Process in chunks to manage memory
+            writer = None
+            total_records = 0
+            
+            try:
+                for chunk_count, chunk in enumerate(pd.read_json(json_path, lines=True, chunksize=self.chunk_size)):
+                    self.logger.info(f"Processing books chunk {chunk_count + 1}...")
+                    
+                    table = pa.Table.from_pandas(chunk)
+                    total_records += len(chunk)
+                    
+                    if writer is None:
+                        writer = pq.ParquetWriter(parquet_path, table.schema)
+                    
+                    writer.write_table(table)
+                    
+                    # Free chunk memory
+                    del chunk, table
+                    gc.collect()
+                    
+            finally:
+                if writer:
+                    writer.close()
+            
+            self._log_memory_usage("after books processing")
             self.logger.info(f"Books data saved to {parquet_path}")
             
-            # Send success notification
+            # Send success notification with record count
             self._send_notification(
                 "Books Processing Complete",
-                f"Successfully processed **{len(books_df):,}** books",
+                f"Successfully processed **{total_records:,}** books",
                 fields=[
                     {"name": "Input File", "value": f"`{self.books_input_json}`", "inline": True},
                     {"name": "Output File", "value": f"`{self.books_output_parquet}`", "inline": True},
-                    {"name": "Records", "value": f"{len(books_df):,}", "inline": True}
+                    {"name": "Records", "value": f"{total_records:,}", "inline": True}
                 ]
             )
             
@@ -202,42 +233,71 @@ class DataPreprocessorStep(PipelineStep):
         except Exception as e:
             error_msg = f"Failed to process books: {str(e)}"
             self.logger.error(error_msg)
-            self._send_notification(
-                "Books Processing Failed",
-                error_msg,
-                error=True
-            )
+            self._send_notification("Books Processing Failed", error_msg, error=True)
             raise
 
     def process_interactions_csv(self) -> str:
         csv_path = self._get_path(self.base_data_path, self.interactions_csv_input)
-        # book_id_map_path and user_id_map_path are now direct paths from config
         parquet_path = self._get_path(self.base_output_path, self.interactions_csv_output_parquet)
 
         try:
             self.logger.info(f"Processing interactions CSV from {csv_path}...")
-            interactions_df = pd.read_csv(csv_path)
-
-            # Use configured paths directly for map files
-            self.logger.info(f"Loading book ID map from {self.book_id_map_path}")
-            book_id_map_df = pd.read_csv(self.book_id_map_path)
-            self.logger.info(f"Loading user ID map from {self.user_id_map_path}")
-            user_id_map_df = pd.read_csv(self.user_id_map_path)
-
-            interactions_df['user_id'] = interactions_df['user_id'].map(user_id_map_df.set_index('user_id_csv')['user_id'])
-            interactions_df['book_id'] = interactions_df['book_id'].map(book_id_map_df.set_index('book_id_csv')['book_id'])
+            self._log_memory_usage("before interactions CSV processing")
             
-            interactions_df.to_parquet(parquet_path)
+            # Load mapping files once
+            book_id_map_df = pd.read_csv(self.book_id_map_path)
+            user_id_map_df = pd.read_csv(self.user_id_map_path)
+            
+            # Create mapping dictionaries for faster lookup
+            book_id_map = book_id_map_df.set_index('book_id_csv')['book_id'].to_dict()
+            user_id_map = user_id_map_df.set_index('user_id_csv')['user_id'].to_dict()
+            
+            # Free mapping DataFrames
+            del book_id_map_df, user_id_map_df
+            gc.collect()
+            
+            # Process CSV in chunks
+            writer = None
+            total_records = 0
+            
+            try:
+                for chunk_count, chunk in enumerate(pd.read_csv(csv_path, chunksize=self.chunk_size)):
+                    self.logger.info(f"Processing interactions chunk {chunk_count + 1}...")
+                    
+                    # Apply mappings
+                    chunk['user_id'] = chunk['user_id'].map(user_id_map)
+                    chunk['book_id'] = chunk['book_id'].map(book_id_map)
+                    
+                    table = pa.Table.from_pandas(chunk)
+                    total_records += len(chunk)
+                    
+                    if writer is None:
+                        writer = pq.ParquetWriter(parquet_path, table.schema)
+                    
+                    writer.write_table(table)
+                    
+                    # Free chunk memory
+                    del chunk, table
+                    gc.collect()
+                    
+            finally:
+                if writer:
+                    writer.close()
+            
+            # Free mapping dictionaries
+            del book_id_map, user_id_map
+            gc.collect()
+            
+            self._log_memory_usage("after interactions CSV processing")
             self.logger.info(f"Interactions CSV data saved to {parquet_path}")
             
-            # Send success notification
             self._send_notification(
                 "Interactions CSV Processing Complete",
-                f"Successfully processed **{len(interactions_df):,}** interactions with ID mapping",
+                f"Successfully processed **{total_records:,}** interactions with ID mapping",
                 fields=[
                     {"name": "Input File", "value": f"`{self.interactions_csv_input}`", "inline": True},
                     {"name": "Output File", "value": f"`{self.interactions_csv_output_parquet}`", "inline": True},
-                    {"name": "Records", "value": f"{len(interactions_df):,}", "inline": True}
+                    {"name": "Records", "value": f"{total_records:,}", "inline": True}
                 ]
             )
             
@@ -245,11 +305,7 @@ class DataPreprocessorStep(PipelineStep):
         except Exception as e:
             error_msg = f"Failed to process interactions CSV: {str(e)}"
             self.logger.error(error_msg)
-            self._send_notification(
-                "Interactions CSV Processing Failed",
-                error_msg,
-                error=True
-            )
+            self._send_notification("Interactions CSV Processing Failed", error_msg, error=True)
             raise
 
     def process_interactions_dedup_json(self) -> str:
@@ -337,18 +393,42 @@ class DataPreprocessorStep(PipelineStep):
 
         try:
             self.logger.info(f"Processing reviews from {json_path}...")
-            reviews_df = pd.read_json(json_path, lines=True)
-            reviews_df.to_parquet(parquet_path)
+            self._log_memory_usage("before reviews processing")
+            
+            writer = None
+            total_records = 0
+            
+            try:
+                for chunk_count, chunk in enumerate(pd.read_json(json_path, lines=True, chunksize=self.chunk_size)):
+                    self.logger.info(f"Processing reviews chunk {chunk_count + 1}...")
+                    
+                    table = pa.Table.from_pandas(chunk)
+                    total_records += len(chunk)
+                    
+                    if writer is None:
+                        writer = pq.ParquetWriter(parquet_path, table.schema)
+                    
+                    writer.write_table(table)
+                    
+                    # Free chunk memory
+                    del chunk, table
+                    gc.collect()
+                    
+            finally:
+                if writer:
+                    writer.close()
+            
+            self._log_memory_usage("after reviews processing")
             self.logger.info(f"Reviews data saved to {parquet_path}")
             
             # Send success notification
             self._send_notification(
                 "Reviews Processing Complete",
-                f"Successfully processed **{len(reviews_df):,}** reviews",
+                f"Successfully processed **{total_records:,}** reviews",
                 fields=[
                     {"name": "Input File", "value": f"`{self.reviews_input_json}`", "inline": True},
                     {"name": "Output File", "value": f"`{self.reviews_output_parquet}`", "inline": True},
-                    {"name": "Records", "value": f"{len(reviews_df):,}", "inline": True}
+                    {"name": "Records", "value": f"{total_records:,}", "inline": True}
                 ]
             )
             

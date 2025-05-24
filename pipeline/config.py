@@ -41,6 +41,7 @@ class DataPreprocessorConfig:
     # Processing parameters
     interactions_dedup_chunk_size: int = 150000
     interactions_dedup_progress_file: str = "chunk_progress.txt"
+    chunk_size: int = 25000
     
     def get_input_path(self, global_config: GlobalConfig) -> Path:
         return global_config.base_data_path

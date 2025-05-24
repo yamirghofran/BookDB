@@ -2,6 +2,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Type, Optional
 import os
+import gc
+import psutil
 
 class PipelineStep(ABC):
     """Base class for all pipeline steps."""
@@ -58,6 +60,21 @@ class PipelineStep(ABC):
     def get_output(self) -> Dict[str, Any]:
         """Get output data produced by this step."""
         return self.output_data
+
+    def _log_memory_usage(self, context: str = ""):
+        """Log current memory usage."""
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        self.logger.info(f"Memory usage {context}: {memory_mb:.1f} MB")
+        
+    def _free_memory(self, *objects):
+        """Explicitly free memory by deleting objects and calling garbage collection."""
+        for obj in objects:
+            if obj is not None:
+                del obj
+        gc.collect()
+        self.logger.info("Freed memory and ran garbage collection")
 
 
 class Pipeline:
@@ -140,14 +157,20 @@ class Pipeline:
         for i, step in enumerate(self.steps):
             self.logger.info(f"Running step {i+1}/{len(self.steps)}: {step.name}")
             
-            # Set input from previous step
+            # Log memory before step
+            step._log_memory_usage(f"before step {step.name}")
+            
             step.set_input(current_input)
             
-            # Execute the step
             try:
                 step_output = step.run()
                 current_input = step_output
                 final_output = step_output
+                
+                # Log memory after step and force garbage collection
+                step._log_memory_usage(f"after step {step.name}")
+                gc.collect()
+                
                 self.logger.info(f"Step completed: {step.name}")
             except Exception as e:
                 self.logger.error(f"Error in step {step.name}: {str(e)}")
