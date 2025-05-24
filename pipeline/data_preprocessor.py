@@ -187,6 +187,11 @@ class DataPreprocessorStep(PipelineStep):
         json_path = self._get_path(self.base_data_path, self.books_input_json)
         parquet_path = self._get_path(self.base_output_path, self.books_output_parquet)
 
+        # Check if output file already exists
+        if os.path.exists(parquet_path):
+            self.logger.info(f"Books parquet file already exists at {parquet_path}, skipping processing")
+            return parquet_path
+
         try:
             self.logger.info(f"Processing books from {json_path}...")
             self._log_memory_usage("before books processing")
@@ -239,6 +244,11 @@ class DataPreprocessorStep(PipelineStep):
     def process_interactions_csv(self) -> str:
         csv_path = self._get_path(self.base_data_path, self.interactions_csv_input)
         parquet_path = self._get_path(self.base_output_path, self.interactions_csv_output_parquet)
+
+        # Check if output file already exists
+        if os.path.exists(parquet_path):
+            self.logger.info(f"Interactions CSV parquet file already exists at {parquet_path}, skipping processing")
+            return parquet_path
 
         try:
             self.logger.info(f"Processing interactions CSV from {csv_path}...")
@@ -313,6 +323,14 @@ class DataPreprocessorStep(PipelineStep):
         parquet_output_path = self._get_path(self.base_output_path, self.interactions_dedup_output_parquet)
         progress_tracker_path = self._get_path(self.base_output_path, self.interactions_dedup_progress_file)
 
+        # Check if output file already exists
+        if os.path.exists(parquet_output_path):
+            self.logger.info(f"Interactions dedup parquet file already exists at {parquet_output_path}, skipping processing")
+            # Clean up progress file if output is complete
+            if os.path.exists(progress_tracker_path):
+                os.remove(progress_tracker_path)
+            return parquet_output_path
+
         try:
             self.logger.info(f"Processing interactions dedup JSON from {json_path}...")
             start_chunk = 0
@@ -359,6 +377,10 @@ class DataPreprocessorStep(PipelineStep):
                 
                 self.logger.info(f"Interactions dedup JSON data saved to {parquet_output_path}")
                 
+                # Clean up progress file on successful completion
+                if os.path.exists(progress_tracker_path):
+                    os.remove(progress_tracker_path)
+                
                 # Send completion notification
                 self._send_notification(
                     "Interactions Dedup Processing Complete",
@@ -390,6 +412,11 @@ class DataPreprocessorStep(PipelineStep):
     def process_reviews(self) -> str:
         json_path = self._get_path(self.base_data_path, self.reviews_input_json)
         parquet_path = self._get_path(self.base_output_path, self.reviews_output_parquet)
+
+        # Check if output file already exists
+        if os.path.exists(parquet_path):
+            self.logger.info(f"Reviews parquet file already exists at {parquet_path}, skipping processing")
+            return parquet_path
 
         try:
             self.logger.info(f"Processing reviews from {json_path}...")
@@ -447,6 +474,11 @@ class DataPreprocessorStep(PipelineStep):
         json_path = self._get_path(self.base_data_path, self.book_works_input_json)
         parquet_path = self._get_path(self.base_output_path, self.book_works_output_parquet)
 
+        # Check if output file already exists
+        if os.path.exists(parquet_path):
+            self.logger.info(f"Book works parquet file already exists at {parquet_path}, skipping processing")
+            return parquet_path
+
         try:
             self.logger.info(f"Processing book works from {json_path}...")
             books_works_df = pd.read_json(json_path, lines=True)
@@ -478,6 +510,11 @@ class DataPreprocessorStep(PipelineStep):
     def process_authors(self) -> str:
         json_path = self._get_path(self.base_data_path, self.authors_input_json)
         parquet_path = self._get_path(self.base_output_path, self.authors_output_parquet)
+
+        # Check if output file already exists
+        if os.path.exists(parquet_path):
+            self.logger.info(f"Authors parquet file already exists at {parquet_path}, skipping processing")
+            return parquet_path
 
         try:
             self.logger.info(f"Processing authors from {json_path}...")
