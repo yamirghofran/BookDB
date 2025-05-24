@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from typing import Dict, Any
 from .core import PipelineStep
-from ..utils import get_device
+from utils import get_device
 from utils import send_discord_webhook
 
 class SBertEmbedderStep(PipelineStep):

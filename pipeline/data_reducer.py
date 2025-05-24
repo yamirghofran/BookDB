@@ -16,7 +16,7 @@ class DataReducerStep(PipelineStep):
     def __init__(self, name: str):
         super().__init__(name)
         self.data_dir = "data"
-        self.output_dir = "data/reduced"
+        self.output_dir = "data"
         self.min_rating = 4
         self.min_user_interactions = 100
         self.min_book_interactions = 500

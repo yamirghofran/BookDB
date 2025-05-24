@@ -51,7 +51,7 @@ class DataPreprocessorStep(PipelineStep):
     def configure(self, config: Dict[str, Any]) -> None:
         super().configure(config) # Call base class configure if it does anything
         self.base_data_path = self.config.get("base_data_path", "data/")
-        self.base_output_path = self.config.get("base_output_path", "data/processed_data/")
+        self.base_output_path = self.config.get("base_output_path", "data/")
         
         # Ensure output directory exists
         os.makedirs(self.base_output_path, exist_ok=True)

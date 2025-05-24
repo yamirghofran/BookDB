@@ -158,7 +158,7 @@ def download_initial_datasets(file_names_df, dataset_names: List[str] = ["goodre
         print(f"Created directory: {data_dir}")
     
     # Create file name to type mapping
-    if hasattr(file_names_df, 'values'):  # DataFrame-like
+    if hasattr(file_names_df, 'iloc') or hasattr(file_names_df, 'dtypes'):  # DataFrame-like
         file_name_type_mapping = dict(zip(file_names_df['name'].values, file_names_df['type'].values))
     else:  # Dictionary-like
         file_name_type_mapping = dict(zip(file_names_df['name'], file_names_df['type']))

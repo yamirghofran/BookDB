@@ -260,7 +260,7 @@ class PipelineConfig:
         """Post-initialization to set up computed paths and create directories."""
         # Ensure all output directories exist
         self.global_config.base_data_path.mkdir(exist_ok=True)
-        (self.global_config.base_data_path / "processed_data").mkdir(exist_ok=True)
+        (self.global_config.base_data_path).mkdir(exist_ok=True)
         Path(self.sbert_trainer.output_base_path).mkdir(exist_ok=True)
         Path(self.sbert_trainer.eval_output_path).mkdir(exist_ok=True)
         Path(self.sbert_trainer.checkpoint_path).mkdir(exist_ok=True)

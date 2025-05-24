@@ -19,7 +19,7 @@ import datetime
 from datasets import load_dataset
 from typing import Dict, List, Tuple, Any, Optional
 from .core import PipelineStep
-from ..utils import get_device
+from utils import get_device
 from utils import send_discord_webhook
 
 
