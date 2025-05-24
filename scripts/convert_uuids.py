@@ -6,7 +6,7 @@ pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
 
-authors_df = pd.read_parquet("../data/authors_df.parquet")
+authors_df = pd.read_parquet("../data/authors.parquet")
 authors_df.head()
 
 # Create a dictionary mapping old author_ids to new UUIDs
@@ -26,7 +26,7 @@ new_authors_df.to_parquet("data/new_authors.parquet")
 new_authors_df.head()
 
 # Changing author_id in books
-books_df = pd.read_parquet("../data/books_df.parquet")
+books_df = pd.read_parquet("../data/books.parquet")
 books_df.head()
 
 # Load the author ID mapping and ensure index is string type

@@ -148,15 +148,15 @@ class PostgresUploaderStep(PipelineStep):
         
         # Initialize book_ncf_id_map
         if self.item_id_map_df is not None:
-            self.book_ncf_id_map = dict(zip(self.item_id_map_df['original_itemId'], self.item_id_map_df['new_itemId']))
+            self.book_ncf_id_map = dict(zip(self.item_id_map_df['itemId'], self.item_id_map_df['ncf_itemId']))
         
         # Populate all_input_user_ids
         if self.users_df is not None:
             try:
-                self.all_input_user_ids = set(self.users_df['original_userId'].astype(str).unique())
+                self.all_input_user_ids = set(self.users_df['userId'].astype(str).unique())
                 logging.info(f"Collected {len(self.all_input_user_ids)} unique user IDs from input users_df.")
             except KeyError:
-                logging.error("Could not find 'original_userId' column in users_df. Cannot create the full user ID set.")
+                logging.error("Could not find 'userId' column in users_df. Cannot create the full user ID set.")
                 # Decide if this is a fatal error for the class
             except Exception as e:
                 logging.error(f"Error processing user IDs from users_df: {e}")

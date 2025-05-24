@@ -20,8 +20,8 @@ pd.set_option('display.max_columns', None)
 
 
 # 1. Remap GMF Embeddings to original User and Item ids
-user_id_map = pd.read_csv('../data/user_id_map_reduced.csv')
-item_id_map = pd.read_csv('../data/item_id_map_reduced.csv')
+user_id_map = pd.read_csv('../data/ncf_user_id_map_reduced.csv')
+item_id_map = pd.read_csv('../data/ncf_item_id_map_reduced.csv')
 
 gmf_user_embeddings_df = dd.read_parquet("../embeddings/gmf_user_embeddings.parquet")
 
@@ -48,13 +48,13 @@ gmf_user_embeddings_final = gmf_user_embeddings_df[['user_id', 'embedding']]
 gmf_user_embeddings_final = gmf_user_embeddings_final.merge(
     user_id_map,
     left_on='user_id',
-    right_on='new_userId',
+    right_on='ncf_userId',
     how='inner'
 )
 
 # Select and rename columns
-gmf_user_embeddings_final = gmf_user_embeddings_final[['original_userId', 'embedding']]
-gmf_user_embeddings_final = gmf_user_embeddings_final.rename(columns={'original_userId': 'user_id'})
+gmf_user_embeddings_final = gmf_user_embeddings_final[['userId', 'embedding']]
+gmf_user_embeddings_final = gmf_user_embeddings_final.rename(columns={'userId': 'user_id'})
 
 
 gmf_book_embeddings_df = dd.read_parquet("../embeddings/gmf_book_embeddings.parquet")
@@ -83,13 +83,13 @@ gmf_book_embeddings_final = gmf_book_embeddings_df[['item_id', 'embedding']]
 gmf_book_embeddings_final = gmf_book_embeddings_final.merge(
     item_id_map,
     left_on='item_id',
-    right_on='new_itemId',
+    right_on='ncf_itemId',
     how='inner'
 )
 
 # Select and rename columns
-gmf_book_embeddings_final = gmf_book_embeddings_final[['original_itemId', 'embedding']]
-gmf_book_embeddings_final = gmf_book_embeddings_final.rename(columns={'original_itemId': 'item_id'})
+gmf_book_embeddings_final = gmf_book_embeddings_final[['itemId', 'embedding']]
+gmf_book_embeddings_final = gmf_book_embeddings_final.rename(columns={'itemId': 'item_id'})
 
 sbert_embeddings_df = dd.read_parquet("embeddings/sbert_embeddings.parquet")
 sbert_embeddings_df.head()

@@ -31,8 +31,8 @@ try:
     interactions_df = pd.read_parquet('data/reduced_interactions.parquet')
     reviews_df = pd.read_parquet('data/reduced_reviews.parquet')
     authors_df = pd.read_parquet('data/new_authors.parquet')
-    users_df = pd.read_csv('data/user_id_map_reduced.csv') # Using the specified CSV
-    item_id_map_df = pd.read_csv('data/item_id_map_reduced.csv')  # Load book ncf_id mapping
+    users_df = pd.read_csv('data/ncf_user_id_map_reduced.csv') # Using the specified CSV
+    item_id_map_df = pd.read_csv('data/ncf_item_id_map_reduced.csv')  # Load book ncf_id mapping
 except FileNotFoundError as e:
     logging.error(f"Error loading data file: {e}. Make sure all files are in the 'data/' directory.")
     exit(1)
@@ -132,7 +132,7 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
 
     # --- Populate the set of all expected user IDs --- # <--- NEW
     try:
-        all_input_user_ids = set(users_df['original_userId'].astype(str).unique()) # Assuming 'user_id' is the column with UUIDs
+        all_input_user_ids = set(users_df['userId'].astype(str).unique()) # Assuming 'user_id' is the column with UUIDs
         logging.info(f"Collected {len(all_input_user_ids)} unique user IDs from the input users_df.")
     except KeyError:
         logging.error("Could not find 'user_id' column in users_df. Cannot create the full user ID set.")
@@ -142,7 +142,7 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
         return
     # --- End NEW section ---
 
-    users_df['original_userId'] = users_df['original_userId'].astype(str)
+    users_df['userId'] = users_df['userId'].astype(str)
     reviews_df['user_id'] = reviews_df['user_id'].astype(str)
     interactions_df['user_id'] = interactions_df['user_id'].astype(str)
 
@@ -151,14 +151,14 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
     fake_domain = fake.domain_name()
 
     for _, row in users_df.iterrows():
-        original_user_id_str = row['original_userId']
-        ncf_id = row['new_userId']
+        original_user_id_str = row['userId']
+        ncf_id = row['ncf_userId']
 
         if original_user_id_str in processed_original_user_ids: continue
         processed_original_user_ids.add(original_user_id_str)
 
         if not is_valid_uuid(original_user_id_str):
-            logging.warning(f"Skipping user row: Invalid UUID format for original_userId '{original_user_id_str}'.")
+            logging.warning(f"Skipping user row: Invalid UUID format for userId '{original_user_id_str}'.")
             continue
 
         # --- MODIFIED Email Generation ---
@@ -255,7 +255,7 @@ def process_and_insert_data(conn, users_df, authors_df, books_df, reviews_df, in
     processed_goodreads_book_ids = set()
 
     # --- Book ncf_id Mapping ---
-    book_ncf_id_map = dict(zip(item_id_map_df['original_itemId'], item_id_map_df['new_itemId']))
+    book_ncf_id_map = dict(zip(item_id_map_df['itemId'], item_id_map_df['ncf_itemId']))
 
     # --- FIX: Added specific check for Pandas Ambiguity Error ---
     try:

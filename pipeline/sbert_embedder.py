@@ -15,8 +15,8 @@ class SBertEmbedderStep(PipelineStep):
     def __init__(self, name: str):
         super().__init__(name)
         self.input_texts_path = "data/book_texts.parquet"
-        self.model_path = "sbert-output/finetuning-all-MiniLM-L6-v2-books"
-        self.output_path = "data/processed_embeddings/book_texts_embeddings.parquet"
+        self.model_path = "results/sbert"  # Updated to use results directory
+        self.output_path = "embeddings/book_texts_embeddings.parquet"  # Updated to use embeddings directory
         self.batch_size = 256
         self.chunk_size = 20000
         self.id_column = "book_id"
@@ -27,35 +27,47 @@ class SBertEmbedderStep(PipelineStep):
 
     def configure(self, config: Dict[str, Any]) -> None:
         super().configure(config)
-        self.input_texts_path = self.config.get("input_texts_path", self.input_texts_path)
-        self.model_path = self.config.get("model_path", self.model_path)
-        self.output_path = self.config.get("output_path", self.output_path)
-        self.batch_size = self.config.get("batch_size", self.batch_size)
-        self.chunk_size = self.config.get("chunk_size", self.chunk_size)
-        self.id_column = self.config.get("id_column", self.id_column)
-        self.text_column = self.config.get("text_column", self.text_column)
+        # Update configuration from config dict
+        for key, value in self.config.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        
         self.device = get_device()
+        
+        # Ensure output directory exists
         output_dir = os.path.dirname(self.output_path)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
             self.logger.info(f"Created output directory: {output_dir}")
 
     def _load_model(self):
+        """Load the fine-tuned SBERT model."""
         self.logger.info(f"Loading model from: {self.model_path}")
         try:
-            self.model = SentenceTransformer(self.model_path, device=self.device)
-            self.logger.info("Model loaded successfully.")
+            if os.path.exists(self.model_path):
+                self.model = SentenceTransformer(self.model_path, device=self.device)
+                self.logger.info("Fine-tuned model loaded successfully.")
+            else:
+                self.logger.warning(f"Fine-tuned model not found at {self.model_path}, falling back to baseline model")
+                # Fall back to baseline model if fine-tuned model not found
+                self.model = SentenceTransformer('all-MiniLM-L6-v2', device=self.device)
+                self.logger.info("Baseline model loaded successfully.")
         except Exception as e:
             self.logger.error(f"Error loading model: {e}")
             raise
 
     def _load_data(self):
+        """Load the book texts data."""
         self.logger.info(f"Loading data from: {self.input_texts_path}")
         try:
-            self.texts_df = dd.read_parquet(self.input_texts_path).compute()
+            if os.path.exists(self.input_texts_path):
+                self.texts_df = pd.read_parquet(self.input_texts_path)
+            else:
+                # Try loading with dask and compute
+                self.texts_df = dd.read_parquet(self.input_texts_path).compute()
+            
             self.logger.info(f"Data loaded successfully. Shape: {self.texts_df.shape}")
-            # print("Data head:")
-            # print(self.texts_df.head())
+            self.logger.info(f"Columns: {list(self.texts_df.columns)}")
         except Exception as e:
             self.logger.error(f"Error loading data: {e}")
             raise
@@ -65,12 +77,15 @@ class SBertEmbedderStep(PipelineStep):
         if self.texts_df is None:
             self.logger.error("Error: Data not loaded.")
             return False
+        
         if self.text_column not in self.texts_df.columns:
             self.logger.error(f"Error: Text column '{self.text_column}' not found in the DataFrame.")
+            self.logger.error(f"Available columns: {list(self.texts_df.columns)}")
             return False
-        # columns_to_keep = [col for col in self.texts_df.columns if col != self.text_column]
-        # if not columns_to_keep:
-        #     print(f"Warning: No columns other than '{self.text_column}' found to keep.")
+        
+        if self.id_column not in self.texts_df.columns:
+            self.logger.warning(f"ID column '{self.id_column}' not found, will use index as ID.")
+        
         return True
 
     def _process_and_save_embeddings(self):
@@ -93,10 +108,11 @@ class SBertEmbedderStep(PipelineStep):
                 embeddings = self.model.encode(
                     texts_in_chunk,
                     batch_size=self.batch_size,
-                    show_progress_bar=False, # Set to True for tqdm progress bar per chunk
+                    show_progress_bar=True,  # Show progress for each chunk
                     convert_to_numpy=True,
                     device=self.device
                 )
+                self.logger.info(f"    Generated {len(embeddings)} embeddings of dimension {embeddings.shape[1]}")
             except Exception as e:
                 self.logger.error(f"    Error encoding chunk: {e}")
                 continue
@@ -107,10 +123,9 @@ class SBertEmbedderStep(PipelineStep):
                 self.logger.error(f"    Error: Embedding count mismatch for chunk ({len(embeddings)} vs {len(chunk_df)}). Skipping write.")
                 continue
             
-            # Drop the original text column after embeddings are generated to save space
-            if self.text_column in chunk_df.columns:
-                 chunk_df = chunk_df.drop(columns=[self.text_column])
-
+            # Keep the ID column but drop the original text column to save space
+            columns_to_keep = [col for col in chunk_df.columns if col != self.text_column]
+            chunk_df = chunk_df[columns_to_keep]
 
             try:
                 table = pa.Table.from_pandas(chunk_df, preserve_index=False)
@@ -122,7 +137,8 @@ class SBertEmbedderStep(PipelineStep):
                 try:
                     parquet_writer = pq.ParquetWriter(self.output_path, table.schema)
                     schema_defined = True
-                    self.logger.info(f"    Created Parquet file: {self.output_path} with schema:\n{table.schema}")
+                    self.logger.info(f"    Created Parquet file: {self.output_path}")
+                    self.logger.info(f"    Schema: {table.schema}")
                 except Exception as e:
                     self.logger.error(f"    Error creating Parquet file: {e}")
                     return total_rows_processed
@@ -138,21 +154,39 @@ class SBertEmbedderStep(PipelineStep):
         if parquet_writer:
             parquet_writer.close()
             self.logger.info(f"Finished writing to {self.output_path}. Total rows processed: {total_rows_processed}")
-        elif total_rows_processed == 0 :
-            self.logger.warning("\nNo data was written to the Parquet file.")
+        elif total_rows_processed == 0:
+            self.logger.warning("No data was written to the Parquet file.")
+        
         return total_rows_processed
 
     def run(self) -> Dict[str, Any]:
-        """Executes the full embedding generation pipeline."""
+        """Execute the full embedding generation pipeline."""
         self.logger.info("Starting SBERT embedding generation step...")
         outputs = {}
+        
         try:
+            # Load the fine-tuned model
+            self._load_model()
+            
+            # Load the text data
             self._load_data()
+            
+            # Generate and save embeddings
             row_count = self._process_and_save_embeddings()
+            
             outputs["embeddings_output_path"] = self.output_path
             outputs["row_count"] = row_count
-            self.logger.info("SBERT embedding generation finished successfully.")
+            outputs["model_used"] = self.model_path
+            outputs["embedding_dimension"] = self.model.get_sentence_embedding_dimension()
+            
+            self.logger.info(f"SBERT embedding generation finished successfully.")
+            self.logger.info(f"Generated embeddings for {row_count} texts")
+            self.logger.info(f"Embedding dimension: {outputs['embedding_dimension']}")
+            self.logger.info(f"Output saved to: {self.output_path}")
+            
         except Exception as e:
             self.logger.error(f"An error occurred during SBERT embedding generation: {e}")
+            outputs["error"] = str(e)
+        
         self.output_data = outputs
         return outputs

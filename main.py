@@ -33,8 +33,8 @@ def main():
     
     # Add all pipeline steps in order
     pipeline.add_step(DataPreprocessorStep, "data_preprocessor")
-    pipeline.add_step(DataReducerStep, "data_reducer")
     pipeline.add_step(UUIDProcessorStep, "uuid_processor")
+    pipeline.add_step(DataReducerStep, "data_reducer")
     pipeline.add_step(SbertTrainerStep, "sbert_trainer")
     pipeline.add_step(SBertEmbedderStep, "sbert_embedder")
     pipeline.add_step(NCFDataPreprocessorStep, "ncf_processor")

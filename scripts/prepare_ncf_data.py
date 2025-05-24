@@ -52,15 +52,15 @@ item_map = pd.Series(range(len(unique_items)), index=unique_items)
 
 # Save the user mapping to CSV
 user_map_df = user_map.reset_index()
-user_map_df.columns = ['original_userId', 'new_userId']
-user_map_df.to_csv("data/user_id_map_reduced.csv", index=False)
-print(f"Reduced user ID mapping saved to data/user_id_map_reduced.csv. Total users: {len(user_map_df)}")
+user_map_df.columns = ['userId', 'ncf_userId']
+user_map_df.to_csv("data/ncf_user_id_map_reduced.csv", index=False)
+print(f"Reduced user ID mapping saved to data/ncf_user_id_map_reduced.csv. Total users: {len(user_map_df)}")
 
 # Save the item mapping to CSV
 item_map_df = item_map.reset_index()
-item_map_df.columns = ['original_itemId', 'new_itemId']
-item_map_df.to_csv("data/item_id_map_reduced.csv", index=False)
-print(f"Reduced item ID mapping saved to data/item_id_map_reduced.csv. Total items: {len(item_map_df)}")
+item_map_df.columns = ['itemId', 'ncf_itemId']
+item_map_df.to_csv("data/ncf_item_id_map_reduced.csv", index=False)
+print(f"Reduced item ID mapping saved to data/ncf_item_id_map_reduced.csv. Total items: {len(item_map_df)}")
 
 # Apply the mappings to the Dask DataFrame
 # Use .map() which works efficiently with a Pandas Series map

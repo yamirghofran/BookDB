@@ -11,7 +11,7 @@ class NCFDataPreprocessorStep(PipelineStep):
         self.interactions_path = "data/reduced_interactions.parquet"
         self.user_map_path = "data/user_id_map.csv"
         self.book_map_path = "data/book_id_map.csv"
-        self.output_dir = "data/processed_ncf/"
+        self.output_dir = "data/ncf/"
         self.interactions_prepared_df = None
         self.user_map = None
         self.item_map = None
@@ -27,15 +27,15 @@ class NCFDataPreprocessorStep(PipelineStep):
         self.book_map_path = self.config.get("book_map_path", self.book_map_path)
         self.output_dir = self.config.get("output_dir", self.output_dir)
         os.makedirs(self.output_dir, exist_ok=True)
-        self.user_map_output_path = os.path.join(self.output_dir, "user_id_map_reduced.csv")
-        self.item_map_output_path = os.path.join(self.output_dir, "item_id_map_reduced.csv")
+        self.user_map_output_path = os.path.join(self.output_dir, "ncf_user_id_map_reduced.csv")
+        self.item_map_output_path = os.path.join(self.output_dir, "ncf_item_id_map_reduced.csv")
         self.final_output_path = os.path.join(self.output_dir, "interactions_prepared_ncf_reduced.parquet")
 
     def load_data(self):
         self.logger.info("Loading datasets...")
         self.interactions_reduced_df = dd.read_parquet(self.interactions_path)
-        # self.user_id_map_orig = pd.read_csv(self.user_map_path) # Original maps, if needed
-        # self.book_id_map_orig = pd.read_csv(self.book_map_path) # Original maps, if needed
+        self.user_id_map_orig = pd.read_csv(self.user_map_path)
+        self.book_id_map_orig = pd.read_csv(self.book_map_path)
         self.logger.info("Datasets loaded.")
 
     def _preprocess_interactions(self):
@@ -65,11 +65,11 @@ class NCFDataPreprocessorStep(PipelineStep):
         self.user_map = pd.Series(range(len(unique_users)), index=unique_users)
         self.item_map = pd.Series(range(len(unique_items)), index=unique_items)
         user_map_df = self.user_map.reset_index()
-        user_map_df.columns = ['original_userId', 'new_userId']
+        user_map_df.columns = ['userId', 'ncf_userId']
         user_map_df.to_csv(self.user_map_output_path, index=False)
         self.logger.info(f"Reduced user ID mapping saved to {self.user_map_output_path}. Total users: {len(user_map_df)}")
         item_map_df = self.item_map.reset_index()
-        item_map_df.columns = ['original_itemId', 'new_itemId']
+        item_map_df.columns = ['itemId', 'ncf_itemId']
         item_map_df.to_csv(self.item_map_output_path, index=False)
         self.logger.info(f"Reduced item ID mapping saved to {self.item_map_output_path}. Total items: {len(item_map_df)}")
         self.logger.info("Mappings created and saved.")

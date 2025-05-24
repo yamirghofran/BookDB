@@ -78,12 +78,12 @@ class GMFUserEmbeddingProcessor(BaseEmbeddingProcessor):
         merged_ddf = combined_ddf.merge(
             user_id_map_ddf,
             left_on='user_id',
-            right_on='new_userId',
+            right_on='ncf_userId',
             how='inner'
         )
-        self.processed_embeddings_ddf = merged_ddf[['original_userId', 'embedding']]
+        self.processed_embeddings_ddf = merged_ddf[['userId', 'embedding']]
         self.processed_embeddings_ddf = self.processed_embeddings_ddf.rename(
-            columns={'original_userId': 'id'}
+            columns={'userId': 'id'}
         )
         logging.info("GMF User embeddings processed.")
         return self.processed_embeddings_ddf
@@ -120,9 +120,9 @@ class GMFBookEmbeddingProcessor(BaseEmbeddingProcessor):
             right_on='new_itemId',
             how='inner'
         )
-        self.processed_embeddings_ddf = merged_ddf[['original_itemId', 'embedding']]
+        self.processed_embeddings_ddf = merged_ddf[['itemId', 'embedding']]
         self.processed_embeddings_ddf = self.processed_embeddings_ddf.rename(
-            columns={'original_itemId': 'id'}
+            columns={'itemId': 'id'}
         )
         logging.info("GMF Book embeddings processed.")
         return self.processed_embeddings_ddf
@@ -190,8 +190,8 @@ class QdrantUploaderStep(PipelineStep):
         self.qdrant_url = "http://localhost:6333"
         self.base_data_path = "data/"
         self.base_embedding_path = "embeddings/"
-        self.user_id_map_path = os.path.join(self.base_data_path, 'user_id_map_reduced.csv')
-        self.item_id_map_path = os.path.join(self.base_data_path, 'item_id_map_reduced.csv')
+        self.user_id_map_path = os.path.join(self.base_data_path, 'ncf_user_id_map_reduced.csv')
+        self.item_id_map_path = os.path.join(self.base_data_path, 'ncf_item_id_map_reduced.csv')
         self.gmf_user_embeddings_path = os.path.join(self.base_embedding_path, 'gmf_user_embeddings.parquet')
         self.gmf_book_embeddings_path = os.path.join(self.base_embedding_path, 'gmf_book_embeddings.parquet')
         self.sbert_embeddings_path = os.path.join(self.base_embedding_path, 'sbert_embeddings.parquet')

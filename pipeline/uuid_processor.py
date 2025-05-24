@@ -11,8 +11,8 @@ class UUIDProcessorStep(PipelineStep):
     def __init__(self, name: str):
         super().__init__(name)
         # Defaults, can be overridden by config
-        self.authors_input_path = "data/authors_df.parquet"
-        self.books_input_path = "data/books_df.parquet"
+        self.authors_input_path = "data/authors.parquet"
+        self.books_input_path = "data/books.parquet"
         self.new_authors_output_path = "data/new_authors.parquet"
         self.new_books_output_path = "data/new_books.parquet"
         self.author_map_csv_path = "data/author_id_map.csv"

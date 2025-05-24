@@ -21,16 +21,16 @@ class DataPreprocessorStep(PipelineStep):
     def __init__(self, name: str):
         super().__init__(name)
         self.base_data_path: str = "data/"
-        self.base_output_path: str = "data/processed_data/"
+        self.base_output_path: str = "data/"
         
         # File name configurations - to be set in configure()
         self.books_input_json: str = "goodreads_books.json"
-        self.books_output_parquet: str = "books_df.parquet"
+        self.books_output_parquet: str = "books.parquet"
         
         self.interactions_csv_input: str = "goodreads_interactions.csv"
         self.book_id_map_path: str = "data/book_id_map.csv" # Path relative to project root or absolute
         self.user_id_map_path: str = "data/user_id_map.csv" # Path relative to project root or absolute
-        self.interactions_csv_output_parquet: str = "interactions_df.parquet"
+        self.interactions_csv_output_parquet: str = "interactions.parquet"
         
         self.interactions_dedup_input_json: str = "goodreads_interactions_dedup.json"
         self.interactions_dedup_output_parquet: str = "interactions_dedup.parquet"
@@ -38,13 +38,13 @@ class DataPreprocessorStep(PipelineStep):
         self.interactions_dedup_chunk_size: int = 150000
         
         self.reviews_input_json: str = "goodreads_reviews.json"
-        self.reviews_output_parquet: str = "reviews_df.parquet"
+        self.reviews_output_parquet: str = "reviews.parquet"
         
         self.book_works_input_json: str = "goodreads_book_works.json"
-        self.book_works_output_parquet: str = "books_works_df.parquet"
+        self.book_works_output_parquet: str = "books_works.parquet"
         
         self.authors_input_json: str = "authors.json"
-        self.authors_output_parquet: str = "authors_df.parquet"
+        self.authors_output_parquet: str = "authors.parquet"
 
     def configure(self, config: Dict[str, Any]) -> None:
         super().configure(config) # Call base class configure if it does anything

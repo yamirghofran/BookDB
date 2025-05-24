@@ -27,12 +27,12 @@ class DataPreprocessorConfig:
     authors_input_json: str = "authors.json"
     
     # Output files
-    books_output_parquet: str = "books_df.parquet"
-    interactions_csv_output_parquet: str = "interactions_df.parquet"
+    books_output_parquet: str = "books.parquet"
+    interactions_csv_output_parquet: str = "interactions.parquet"
     interactions_dedup_output_parquet: str = "interactions_dedup.parquet"
-    reviews_output_parquet: str = "reviews_df.parquet"
-    book_works_output_parquet: str = "books_works_df.parquet"
-    authors_output_parquet: str = "authors_df.parquet"
+    reviews_output_parquet: str = "reviews.parquet"
+    book_works_output_parquet: str = "books_works.parquet"
+    authors_output_parquet: str = "authors.parquet"
     
     # ID mapping files
     book_id_map_path: str = "data/book_id_map.csv"
@@ -46,7 +46,7 @@ class DataPreprocessorConfig:
         return global_config.base_data_path
     
     def get_output_path(self, global_config: GlobalConfig) -> Path:
-        return global_config.base_data_path / "processed_data"
+        return global_config.base_data_path
 
 @dataclass
 class DataReducerConfig:
@@ -78,8 +78,8 @@ class DataReducerConfig:
 class UUIDProcessorConfig:
     """Configuration for UUID conversion step."""
     # Input files
-    authors_input_path: str = "data/authors_df.parquet"
-    books_input_path: str = "data/books_df.parquet"
+    authors_input_path: str = "data/authors.parquet"
+    books_input_path: str = "data/books.parquet"
     
     # Output files
     new_authors_output_path: str = "data/new_authors.parquet"
@@ -129,7 +129,7 @@ class SBERTEmbedderConfig:
     
     # Input/Output
     input_file: str = "data/book_texts.parquet"
-    output_file: str = "book_texts_embeddings.parquet"
+    output_file: str = "embeddings/sbert_embeddings.parquet"
     
     # Processing parameters
     batch_size: int = 256
@@ -147,8 +147,8 @@ class NCFProcessorConfig:
     
     # Output files
     final_output_file: str = "data/interactions_prepared_ncf_reduced.parquet"
-    user_map_output_file: str = "data/user_id_map_reduced.csv"
-    item_map_output_file: str = "data/item_id_map_reduced.csv"
+    user_map_output_file: str = "data/ncf_user_id_map_reduced.csv"
+    item_map_output_file: str = "data/ncf_item_id_map_reduced.csv"
     
     # Date format for timestamp conversion
     timestamp_format: str = "%a %b %d %H:%M:%S %z %Y"
@@ -179,8 +179,8 @@ class PostgresUploaderConfig:
     interactions_file: str = "data/reduced_interactions.parquet"
     reviews_file: str = "data/reduced_reviews.parquet"
     authors_file: str = "data/new_authors.parquet"
-    users_file: str = "data/user_id_map_reduced.csv"
-    item_id_map_file: str = "data/item_id_map_reduced.csv"
+    users_file: str = "data/ncf_user_id_map_reduced.csv"
+    item_id_map_file: str = "data/ncf_item_id_map_reduced.csv"
     
     # Processing parameters
     batch_size: int = 1000
@@ -215,15 +215,15 @@ class QdrantUploaderConfig:
     sbert_embeddings_path: str = "embeddings/sbert_embeddings.parquet"
     gmf_user_embeddings_path: str = "embeddings/gmf_user_embeddings.parquet"
     gmf_book_embeddings_path: str = "embeddings/gmf_book_embeddings.parquet"
-    user_id_map_path: str = "data/user_id_map_reduced.csv"
-    item_id_map_path: str = "data/item_id_map_reduced.csv"
+    user_id_map_path: str = "data/ncf_user_id_map_reduced.csv"
+    item_id_map_path: str = "data/ncf_item_id_map_reduced.csv"
 
 @dataclass
 class NCFTrainingConfig:
     """Configuration for NCF training."""
     # Data paths
     prepared_data_path: str = "data/interactions_prepared_ncf_reduced.parquet"
-    ncf_target_dir: str = "neural-collaborative-filtering/data"
+    ncf_target_dir: str = "neural-collaborative-filtering/src/data"
     ncf_target_file: str = "interactions.parquet"
     
     # Script paths
