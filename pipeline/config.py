@@ -225,6 +225,7 @@ class NCFTrainingConfig:
     prepared_data_path: str = "data/interactions_prepared_ncf_reduced.parquet"
     ncf_target_dir: str = "neural-collaborative-filtering/src/data"
     ncf_target_file: str = "interactions.parquet"
+    results_dir: str = "results/ncf"
     
     # Script paths
     train_script: str = "neural-collaborative-filtering/src/train.py"
@@ -253,7 +254,7 @@ class PipelineConfig:
     qdrant_uploader: QdrantUploaderConfig = field(default_factory=QdrantUploaderConfig)
     
     # Pipeline control
-    run_ncf: bool = field(default_factory=lambda: os.getenv("RUN_NCF", "false").lower() == "true")
+    run_ncf: bool = field(default_factory=lambda: os.getenv("RUN_NCF", "true").lower() == "true")
     
     def __post_init__(self):
         """Post-initialization to set up computed paths and create directories."""

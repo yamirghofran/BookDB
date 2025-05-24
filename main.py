@@ -21,6 +21,7 @@ from pipeline.sbert_trainer import SbertTrainerStep
 from pipeline.sbert_embedder import SBertEmbedderStep
 from pipeline.postgres_uploader import PostgresUploaderStep
 from pipeline.qdrant_uploader import QdrantUploaderStep
+from pipeline.ncf_training import NCFTrainingStep
 
 
 def main():
@@ -38,16 +39,7 @@ def main():
     pipeline.add_step(SbertTrainerStep, "sbert_trainer")
     pipeline.add_step(SBertEmbedderStep, "sbert_embedder")
     pipeline.add_step(NCFDataPreprocessorStep, "ncf_processor")
-    
-    # Conditional NCF training step
-    if config.run_ncf:
-        logging.info("NCF training enabled - will run neural collaborative filtering")
-        # Note: NCF training step would need to be implemented
-        # pipeline.add_step(NCFTrainingStep, "ncf_training")
-    else:
-        logging.info("NCF training disabled - skipping neural collaborative filtering")
-    
-    # Database upload steps
+    pipeline.add_step(NCFTrainingStep, "ncf_training")
     pipeline.add_step(PostgresUploaderStep, "postgres_uploader")
     pipeline.add_step(QdrantUploaderStep, "qdrant_uploader")
     
