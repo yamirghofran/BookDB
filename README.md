@@ -26,6 +26,9 @@ The best-performing model for content-based filtering is our finetuned SBERT mod
 ### Collaborative Filtering
 The best-performing model for collaborative filtering surprisingly turned out to be the Generalize Matrix Factorization model which was used in the pipeline to generate user and item embeddings in `embeddings/gmf_user_embeddings.parquet` and `embeddings/gmf_item_embeddings.parquet` respectively. These embeddings are later saved to Qdrant collections to be used for similarity search (using the dot product as the similarity metric).
 
+### Cross-Encoder
+For the reranking stage, even though we didn't get the chance to integrate it into the pipeline, we finetuned a cross-encoder model available in the  `reranker` directory.
+
 ## Training and tuning
 The entire pipeline from downloading the dataset to training the models and saving the embeddings is orchestrated by the `main.py` script. You just have to set up your python environment, install the dependencies, and run the script.
 
