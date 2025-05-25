@@ -18,7 +18,7 @@ class SBertEmbedderStep(PipelineStep):
         super().__init__(name)
         self.input_texts_path = "data/book_texts.parquet"
         self.model_path = "results/sbert"  # Updated to use results directory
-        self.output_path = "embeddings/book_texts_embeddings.parquet"  # Updated to use embeddings directory
+        self.output_path = "embeddings/sbert_embeddings.parquet"  # Updated to use embeddings directory
         self.batch_size = 256
         self.chunk_size = 20000
         self.id_column = "book_id"

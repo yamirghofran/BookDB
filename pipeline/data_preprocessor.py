@@ -601,4 +601,14 @@ class DataPreprocessorStep(PipelineStep):
 
     def run(self) -> Dict[str, Any]:
         """Satisfies PipelineStep ABC and delegates to process."""
-        return self.process()
+        try:
+            result = self.process()
+            
+            # Free memory after processing
+            self._free_memory()
+            
+            return result
+        except Exception as e:
+            # Free memory even on error
+            self._free_memory()
+            raise

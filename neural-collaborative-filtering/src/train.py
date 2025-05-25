@@ -192,5 +192,5 @@ mlp_config['num_items'] = num_items
 neumf_config['num_users'] = num_users
 neumf_config['num_items'] = num_items
 
-# if __name__ == '__main__':
-#     run_ncf_pipeline(book_interactions)
+if __name__ == '__main__':
+    run_ncf_pipeline(book_interactions)

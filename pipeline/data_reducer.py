@@ -314,6 +314,9 @@ class DataReducerStep(PipelineStep):
                 ]
             )
             
+            # Free memory after processing
+            self._free_memory(interactions_df, self.interactions_filtered_rating_df, self.valid_users, self.valid_books)
+            
             self.output_data = outputs
             return outputs
             
@@ -325,4 +328,6 @@ class DataReducerStep(PipelineStep):
                 error_msg,
                 error=True
             )
+            # Free memory even on error
+            self._free_memory(self.interactions_filtered_rating_df, self.valid_users, self.valid_books)
             raise

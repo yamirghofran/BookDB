@@ -102,6 +102,9 @@ class UUIDProcessorStep(PipelineStep):
                 ]
             )
             
+            # Free memory after processing authors
+            self._free_memory(authors_df, new_authors_df)
+            
             return self.author_id_map_dict
         except Exception as e:
             error_msg = f"Failed to process authors: {str(e)}"
@@ -150,6 +153,9 @@ class UUIDProcessorStep(PipelineStep):
                     {"name": "Author Mappings Used", "value": f"{len(map_for_books_lookup):,}", "inline": True}
                 ]
             )
+            
+            # Free memory after processing books
+            self._free_memory(books_df, new_books_df, map_for_books_lookup)
             
             return self.new_books_output_path
         except Exception as e:
@@ -200,6 +206,9 @@ class UUIDProcessorStep(PipelineStep):
                 ]
             )
             
+            # Free memory after processing
+            self._free_memory(author_id_map)
+            
             self.output_data = outputs
             return outputs
             
@@ -211,4 +220,6 @@ class UUIDProcessorStep(PipelineStep):
                 error_msg,
                 error=True
             )
+            # Free memory even on error
+            self._free_memory()
             raise

@@ -279,6 +279,10 @@ class NCFDataPreprocessorStep(PipelineStep):
                 ]
             )
             
+            # Free memory after processing
+            self._free_memory(self.interactions_reduced_df, self.user_id_map_orig, self.book_id_map_orig, 
+                            self.interactions_prepared_df, self.user_map, self.item_map, self.interactions_final_df)
+            
             self.output_data = outputs
             return outputs
             
@@ -290,4 +294,7 @@ class NCFDataPreprocessorStep(PipelineStep):
                 error_msg,
                 error=True
             )
+            # Free memory even on error
+            self._free_memory(self.interactions_reduced_df, self.user_id_map_orig, self.book_id_map_orig, 
+                            self.interactions_prepared_df, self.user_map, self.item_map, self.interactions_final_df)
             raise
