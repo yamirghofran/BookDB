@@ -2,23 +2,43 @@
 
 Include a brief introduction outlining what the project does and offers to potential users. Be sure to detail the problem(s) and objective(s) the project addresses.
 
-## Dataset
+This project aims to design and implement a book recommendation system using Machine Learning. The models will then be used in a consumer-facing web application to recommend books to users based on their reading history.
 
-Provide guidance on where to download the dataset and how to set it up for use with BookDB.
+## Tech Stack
+
+- Python (for the ML pipeline)
+- FastAPI (service that exposes the ML models to the web-app)
+- React (frontend for web-app)
+- Go (backend for web-app)
+- Qdrant (for storing book and user embeddings)
+- Postgres (for storing user data and book metadata)
+- Docker (for containerization)
+
+## Dataset
+This project mainly uses the book metadata and user-book interactions datasets from Goodreads, available at [Goodreads Dataset](https://cseweb.ucsd.edu/~jmcauley/datasets/goodreads.html#datasets). Other datasets regarding authors, book_works, and csv id mapping files were used in preprocessing to prepare the data for training the models.
+
+The required datasets are automatically downloaded into the `data` directory if they are not already present in the first stage of the pipeline (data preprocessing).
 
 ## Model
+### Content-based Filtering
+The best-performing model for content-based filtering is our finetuned SBERT model at `sbert-output` which is used in the pipeline to generate book embeddings in `embeddings/sbert_embeddings.parquet` which are later uploaded to a Qdrant collection to be used for similarity search (using cosine similarity as the similarity metric).
 
-Add a description of the model that performs the best, based on your evaluation.
+### Collaborative Filtering
+The best-performing model for collaborative filtering surprisingly turned out to be the Generalize Matrix Factorization model which was used in the pipeline to generate user and item embeddings in `embeddings/gmf_user_embeddings.parquet` and `embeddings/gmf_item_embeddings.parquet` respectively. These embeddings are later saved to Qdrant collections to be used for similarity search (using the dot product as the similarity metric).
 
 ## Training and tuning
-
-Provide instructions on training and tuning the model, along with the necessary compute and data requirements.
+The entire pipeline from downloading the dataset to training the models and saving the embeddings is orchestrated by the `main.py` script. You just have to set up your python environment, install the dependencies, and run the script.
 
 ## Inference
-
-- Add a description of how to use the model to make inferences.
-- Provide an example of how a user would use BookDB to recommend the top three books for them to read.
+Since we were able to export static embeddings from both of our models, we saved them to Qdrant and queried them from the Go backend to produce recommendations.
 
 ## Design and Development
+After experimentation and exploration in jupyter notebooks, we created object-oriented pipeline step classes in the `pipeline` directory to make the code more modular and easier to maintain. Then, in the main script, we created a pipeline object that orchestrates the steps and runs the pipeline.
 
-Ensure the engineering shines! Describe and justify the library design, and refer to the documentation.
+The configuration of the pipeline is set in `pipeline/config.py` and can be changed easily.
+
+We iterated on a pytorch implementation of Neural Collaborative Filtering (NCF) model in the `neural_collaborative_filtering` directory.
+
+We also created a Discord notifier function to send notifications to a Discord channel at different stages of the pipeline.
+
+![Discord](discord.png)
