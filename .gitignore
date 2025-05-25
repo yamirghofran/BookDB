@@ -47,6 +47,9 @@ data/
 # Models
 models/
 sbert-output/
+runs/
+checkpoints/
+embeddings/
 
 # Results
 results/
