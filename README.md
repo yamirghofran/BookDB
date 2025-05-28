@@ -1,6 +1,6 @@
 # BookDB
 
-Include a brief introduction outlining what the project does and offers to potential users. Be sure to detail the problem(s) and objective(s) the project addresses.
+![Report](report.pdf)
 
 This project aims to design and implement a book recommendation system using Machine Learning. The models will then be used in a consumer-facing web application to recommend books to users based on their reading history.
 
@@ -27,20 +27,20 @@ The best-performing model for content-based filtering is our finetuned SBERT mod
 The best-performing model for collaborative filtering surprisingly turned out to be the Generalize Matrix Factorization model which was used in the pipeline to generate user and item embeddings in `embeddings/gmf_user_embeddings.parquet` and `embeddings/gmf_item_embeddings.parquet` respectively. These embeddings are later saved to Qdrant collections to be used for similarity search (using the dot product as the similarity metric).
 
 ### Cross-Encoder
-For the reranking stage, even though we didn't get the chance to integrate it into the pipeline, we finetuned a cross-encoder model available in the  `reranker` directory.
+For the reranking stage, even though we didn't get the chance to integrate it into the pipeline, we finetuned a cross-encoder model available in the  [reranker](reranker) directory.
 
 ## Training and tuning
-The entire pipeline from downloading the dataset to training the models and saving the embeddings is orchestrated by the `main.py` script. You just have to set up your python environment, install the dependencies, and run the script.
+The entire pipeline from downloading the dataset to training the models and saving the embeddings is orchestrated by the [main.py](main.py) script. You just have to set up your python environment, install the dependencies, and run the script.
 
 ## Inference
 Since we were able to export static embeddings from both of our models, we saved them to Qdrant and queried them from the Go backend to produce recommendations.
 
 ## Design and Development
-After experimentation and exploration in jupyter notebooks, we created object-oriented pipeline step classes in the `pipeline` directory to make the code more modular and easier to maintain. Then, in the main script, we created a pipeline object that orchestrates the steps and runs the pipeline.
+After experimentation and exploration in jupyter notebooks, we created object-oriented pipeline step classes in the [pipeline](pipeline) directory to make the code more modular and easier to maintain. Then, in the main script, we created a pipeline object that orchestrates the steps and runs the pipeline.
 
-The configuration of the pipeline is set in `pipeline/config.py` and can be changed easily.
+The configuration of the pipeline is set in [pipeline/config.py](pipeline/config.py) and can be changed easily.
 
-We iterated on a pytorch implementation of Neural Collaborative Filtering (NCF) model in the `neural_collaborative_filtering` directory.
+We iterated on a pytorch implementation of Neural Collaborative Filtering (NCF) model in the [neural-collaborative-filtering](neural-collaborative-filtering) directory.
 
 We also created a Discord notifier function to send notifications to a Discord channel at different stages of the pipeline.
 

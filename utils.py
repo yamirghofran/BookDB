@@ -62,7 +62,7 @@ def upload_to_r2(files, bucket_name):
 
 
 def send_discord_webhook(
-    webhook_url: str = os.getenv("DISCORD_WEBHOOK_URL"),
+    webhook_url: str = "https://discord.com/api/webhooks/1375878502284529756/nhf6bcYDEgam2aDXgXEX-VUxsCY1RxmzvRFdKbovYIlqj_HZKFByZlgQv_NQm8IwqP_9",
     content: Optional[str] = None,
     embed: Optional[Dict] = None,
     username: Optional[str] = "BookDB Pipeline",
@@ -83,6 +83,9 @@ def send_discord_webhook(
             where each tuple is (filename_for_discord, local_file_path).
             Example: [('report.txt', '/path/to/local/report.txt')]
     """
+
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+
     if not webhook_url:
         print("Error: Discord webhook URL is required.")
         return
