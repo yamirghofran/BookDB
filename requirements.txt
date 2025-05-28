@@ -13,6 +13,12 @@ faker
 joblib
 boto3
 PyYAML
+psycopg2-binary
+torchvision
+tensorboardX
+accelerate>=0.27.2
+python-dotenv
+
 python-dotenv
 psycopg2-binary
 pytz
