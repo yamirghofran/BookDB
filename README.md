@@ -1,6 +1,6 @@
 # BookDB
 
-![Report](report.pdf)
+[Report](report.pdf)
 
 This project aims to design and implement a book recommendation system using Machine Learning. The models will then be used in a consumer-facing web application to recommend books to users based on their reading history.
 
