@@ -33,7 +33,7 @@ For the reranking stage, even though we didn't get the chance to integrate it in
 The entire pipeline from downloading the dataset to training the models and saving the embeddings is orchestrated by the [main.py](main.py) script. You just have to set up your python environment, install the dependencies, and run the script.
 
 ## Inference
-Since we were able to export static embeddings from both of our models, we saved them to Qdrant and queried them from the Go backend to produce recommendations.
+Since we were able to export static embeddings from both of our models, we saved them to Qdrant and queried them from the [Go backend](website/backend) to produce recommendations.
 
 ## Design and Development
 After experimentation and exploration in jupyter notebooks, we created object-oriented pipeline step classes in the [pipeline](pipeline) directory to make the code more modular and easier to maintain. Then, in the main script, we created a pipeline object that orchestrates the steps and runs the pipeline.
