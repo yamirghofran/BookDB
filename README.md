@@ -1,5 +1,6 @@
 # BookDB
 
+Click on the thumbnail below to watch full demo.
 [![BookDB Demo](https://github.com/user-attachments/assets/d2a8d58f-9988-451c-a46a-37d1a538392f)](https://assets.amirghofran.com/amirghofran-com-astro-public/bookdb-vid1.mp4)
 
 This project aims to design and implement a book recommendation system using Machine Learning. The models will then be used in a consumer-facing web application to recommend books to users based on their reading history.
