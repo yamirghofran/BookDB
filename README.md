@@ -1,4 +1,5 @@
 # BookDB
+<img width="1548" height="1098" alt="CleanShot 2025-09-21 at 13 44 49@2x" src="https://github.com/user-attachments/assets/6f78444b-2e3c-4488-bb46-715217ec27dd" />
 
 [Report](report.pdf)
 
