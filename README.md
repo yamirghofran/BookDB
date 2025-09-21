@@ -1,9 +1,9 @@
 # BookDB
-<img width="1548" height="1098" alt="CleanShot 2025-09-21 at 13 44 49@2x" src="https://github.com/user-attachments/assets/6f78444b-2e3c-4488-bb46-715217ec27dd" />
-
-[Report](report.pdf)
-
+![](https://assets.amirghofran.com/amirghofran-com-astro-public/bookdb-vid1.mp4)\
 This project aims to design and implement a book recommendation system using Machine Learning. The models will then be used in a consumer-facing web application to recommend books to users based on their reading history.
+## Poster & Report
+<img width="1548" height="1098" alt="CleanShot 2025-09-21 at 13 44 49@2x" src="https://github.com/user-attachments/assets/6f78444b-2e3c-4488-bb46-715217ec27dd" />
+[Report](report.pdf)
 
 ## Tech Stack
 
